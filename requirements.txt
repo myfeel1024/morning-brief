@@ -1,0 +1,5 @@
+yfinance
+requests
+anthropic
+pillow
+python-telegram-bot[job-queue]
