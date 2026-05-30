@@ -30,6 +30,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes,
 )
+from stock_research import research_stock
 
 
 # ── 환경변수 로드 ─────────────────────────────────────────────
@@ -292,13 +293,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Step 2: 유형별 분석 ──
 
     if img_type == "portfolio" and stocks:
-        # 포트폴리오 분석
-        news_query = " OR ".join(stocks[:3]) + " stock Korea"
-        news_list  = fetch_recent_news(query=news_query, n=4)
-        news_text  = "\n".join(news_list) if news_list else ""
+        # ── 증권사 리포트 + 뉴스 수집 (종목별) ──
+        await msg.edit_text("📊 증권사 리포트 및 뉴스 수집 중...")
+        research_parts = []
+        for s in stocks[:6]:
+            data = research_stock(s)
+            if data and "리서치 데이터 없음" not in data:
+                research_parts.append(data)
+        research_text = "\n\n".join(research_parts) if research_parts else "수집된 리서치 데이터 없음"
+
+        await msg.edit_text("🤖 AI 종합 분석 중... (30~50초)")
 
         prompt = f"""당신은 한국 주식 전문 애널리스트이자 투자 비서입니다.
-보유 종목 화면을 보고 각 종목에 대한 종합 분석을 제공하세요.
+보유 종목 화면을 보고, 아래 증권사 리포트·목표주가·뉴스 데이터를 바탕으로
+각 종목에 대한 심층 분석을 제공하세요.
 
 [보유 종목]
 {', '.join(stocks)}
@@ -306,19 +314,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 [현재 매크로 환경]
 {macro_text}
 
-[관련 뉴스]
-{news_text}
+[증권사 리포트 & 뉴스 데이터]
+{research_text}
 
 각 종목별로 아래 항목을 분석하세요:
-① 현재 업황 & 매크로와의 연관성
-② 기술적 분석 관점 (현재 추세, 주요 지지/저항 수준)
-③ 밸류에이션 (Forward P/E, 업종 대비 수준)
-④ 리스크 요인
-⑤ 단기(1개월)/중기(3~6개월) 투자 전략
+① 증권가 컨센서스 요약
+   - 주요 증권사 투자의견 및 목표주가 범위
+   - 현재가 대비 목표주가 괴리율 (upside/downside %)
+   - 최근 리포트의 핵심 투자 포인트
+② 현재 업황 & 매크로와의 연관성
+③ 기술적 분석 관점 (추세, 주요 지지/저항)
+④ 밸류에이션 (Forward P/E, 업종 대비 수준)
+⑤ 리스크 요인
+⑥ 투자 전략 (단기 1개월 / 중기 3~6개월)
 
-마지막에 전체 포트폴리오 관점에서 리스크 분산 및 오늘의 전략 한 문단으로 요약.
+마지막에 전체 포트폴리오 관점에서 리스크 분산 및 오늘의 전략을 한 문단으로 요약.
 
-한국어로 작성. 각 종목 300자 이내."""
+한국어로 작성. 각 종목 350자 이내."""
 
         analysis = client.messages.create(
             model="claude-sonnet-4-6", max_tokens=3000,

@@ -3,3 +3,5 @@ requests
 anthropic
 pillow
 python-telegram-bot[job-queue]
+beautifulsoup4
+lxml
