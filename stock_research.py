@@ -157,6 +157,64 @@ def get_naver_stock_news(stock_code: str, n: int = 5) -> list[str]:
         return []
 
 
+# ── 한국 주식 실시간 데이터 (yfinance .KS/.KQ) ───────────────
+
+def get_kr_stock_realtime(stock_code: str) -> dict:
+    """
+    yfinance로 한국 주식 실시간 데이터 조회.
+    KOSPI(.KS) → KOSDAQ(.KQ) 순으로 시도.
+    """
+    for suffix in [".KS", ".KQ"]:
+        try:
+            t  = yf.Ticker(f"{stock_code}{suffix}")
+            fi = t.fast_info
+            if not fi.last_price:
+                continue
+
+            price  = fi.last_price
+            prev   = fi.previous_close
+            result = {"현재가": f"{price:,.0f}원"}
+
+            # 등락
+            if prev and prev > 0:
+                diff = price - prev
+                pct  = diff / prev * 100
+                arrow = "▲" if diff >= 0 else "▼"
+                result["등락"] = f"{arrow} {abs(diff):,.0f}원 ({pct:+.2f}%)"
+
+            # 52주 고저 + 현재 위치
+            high52 = fi.fifty_two_week_high
+            low52  = fi.fifty_two_week_low
+            if high52 and low52 and high52 > low52:
+                result["52주 고가"] = f"{high52:,.0f}원"
+                result["52주 저가"] = f"{low52:,.0f}원"
+                pos = (price - low52) / (high52 - low52) * 100
+                result["52주 내 위치"] = f"{pos:.0f}%  (0%=저점, 100%=고점)"
+
+            # 재무 지표
+            info = t.info
+            if info.get("marketCap") and info["marketCap"] > 0:
+                mc = info["marketCap"]
+                result["시가총액"] = (
+                    f"{mc/1e12:.2f}조원" if mc >= 1e12 else f"{mc/1e8:.0f}억원"
+                )
+            if info.get("trailingPE") and info["trailingPE"] > 0:
+                result["PER(TTM)"] = f"{info['trailingPE']:.1f}배"
+            if info.get("priceToBook") and info["priceToBook"] > 0:
+                result["PBR"] = f"{info['priceToBook']:.2f}배"
+            if info.get("trailingEps") and info["trailingEps"] != 0:
+                result["EPS"] = f"{info['trailingEps']:,.0f}원"
+            if info.get("dividendYield") and info["dividendYield"] > 0:
+                result["배당수익률"] = f"{info['dividendYield']*100:.2f}%"
+            if fi.volume and fi.volume > 0:
+                result["거래량"] = f"{fi.volume:,}주"
+
+            return result
+        except Exception:
+            continue
+    return {}
+
+
 # ── 미국 주식 애널리스트 데이터 (yfinance) ────────────────────
 
 def get_us_analyst_data(ticker: str) -> dict:
@@ -214,15 +272,39 @@ def research_stock(stock_name: str) -> str:
         # ── 한국 주식 ──────────────────────────────────────
         code = get_kr_stock_code(stock_name)
 
-        # 1. 네이버 금융 증권사 리포트
+        # 1. 실시간 시세 & 재무 데이터
+        if code:
+            realtime = get_kr_stock_realtime(code)
+            if realtime:
+                lines = "\n".join(f"  {k}: {v}" for k, v in realtime.items())
+                parts.append(f"[실시간 시세 & 재무 - {stock_name}]\n{lines}")
+
+        # 2. 네이버 금융 증권사 리포트 + 목표주가
         if code:
             reports = get_naver_analyst_reports(code, 5)
             if reports:
                 lines = []
+                # 현재가 대비 목표주가 upside 계산
+                current_price = 0
+                try:
+                    price_str = realtime.get("현재가", "").replace(",", "").replace("원", "")
+                    if price_str.isdigit():
+                        current_price = float(price_str)
+                except Exception:
+                    pass
+
                 for r in reports:
                     line = f"  [{r['firm'] or '?'}] {r['title']}"
                     if r["target_price"]:
                         line += f" | 목표주가 {r['target_price']}"
+                        # upside % 계산
+                        if current_price > 0:
+                            try:
+                                tp = float(r["target_price"].replace(",", "").replace("원", ""))
+                                upside = (tp - current_price) / current_price * 100
+                                line += f" ({upside:+.1f}%)"
+                            except Exception:
+                                pass
                     if r["opinion"]:
                         line += f" | {r['opinion']}"
                     if r["date"]:
@@ -230,19 +312,19 @@ def research_stock(stock_name: str) -> str:
                     lines.append(line)
                 parts.append(f"[증권사 리포트 - {stock_name}]\n" + "\n".join(lines))
 
-        # 2. Google News - 목표주가 관련 헤드라인
+        # 3. Google News - 목표주가 헤드라인
         target_news = get_google_news(f"{stock_name} 목표주가 증권 리포트", 5)
         if target_news:
             parts.append(f"[증권가 목표주가 뉴스]\n" + "\n".join(f"• {n}" for n in target_news))
 
-        # 3. 네이버 최신 뉴스
+        # 4. 네이버 최신 뉴스
         if code:
             naver_news = get_naver_stock_news(code, 4)
             if naver_news:
                 parts.append(f"[최신 뉴스]\n" + "\n".join(f"• {n}" for n in naver_news))
 
-        # 4. Google News - 최신 뉴스 보충
-        if not parts:
+        # 5. Google News - 최신 뉴스 보충
+        if len(parts) <= 1:
             fallback = get_google_news(f"{stock_name} 주식 실적 전망", 5)
             if fallback:
                 parts.append(f"[최신 뉴스]\n" + "\n".join(f"• {n}" for n in fallback))
