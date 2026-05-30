@@ -1,0 +1,30 @@
+name: 코스피 모닝 브리핑
+
+on:
+  schedule:
+    - cron: '50 22 * * *'  # 매일 22:50 UTC = 07:50 KST
+  workflow_dispatch:        # 수동 실행 버튼도 활성화
+
+jobs:
+  send-briefing:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install yfinance requests anthropic pillow
+
+      - name: 모닝 브리핑 실행
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python morning_brief.py
