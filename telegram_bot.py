@@ -451,38 +451,103 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── 텍스트 질문 처리 ──────────────────────────────────────────
 
+# 자주 묻는 미국 주요 티커
+_US_TICKERS = {
+    "AAPL","MSFT","NVDA","GOOGL","GOOG","AMZN","META","TSLA",
+    "AMD","INTC","QCOM","AVGO","TSM","SMCI","MU","ARM",
+    "NFLX","DIS","JPM","BAC","GS","V","MA","PYPL",
+    "SPY","QQQ","SOXL","TQQQ",
+}
+
+def _detect_stocks_in_text(text: str) -> list[str]:
+    """질문 텍스트에서 종목명 추출 (한국 + 미국)"""
+    import re as _re
+    from stock_research import KR_STOCK_MAP
+
+    found = []
+    # 한국 주식: 사전 기반
+    for name in KR_STOCK_MAP:
+        if name in text and name not in found:
+            found.append(name)
+    # 미국 주식: 대문자 2~5글자 티커
+    for ticker in _re.findall(r'\b[A-Z]{2,5}\b', text):
+        if ticker in _US_TICKERS and ticker not in found:
+            found.append(ticker)
+    return found[:4]   # 최대 4개
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update):
         return
 
-    question   = update.message.text.strip()
-    msg        = await update.message.reply_text("💭 분석 중...")
+    question = update.message.text.strip()
+    msg      = await update.message.reply_text("💭 분석 중...")
+
+    # ── 매크로 & 뉴스 ──
     macro      = get_macro_context()
     macro_text = format_macro(macro)
     news_list  = fetch_recent_news(n=4)
     news_text  = "\n".join(news_list) if news_list else ""
 
+    # ── 종목 감지 → 실시간 데이터 + 증권사 리포트 수집 ──
+    detected   = _detect_stocks_in_text(question)
+    research_text = ""
+
+    if detected:
+        await msg.edit_text(f"🔍 {', '.join(detected)} 데이터 수집 중...")
+        parts = []
+        for stock in detected:
+            data = research_stock(stock)
+            if data and "데이터 없음" not in data:
+                parts.append(data)
+        research_text = "\n\n".join(parts)
+
+    # ── 프롬프트 구성 ──
+    research_section = (
+        f"\n[종목 실시간 데이터 & 증권사 리포트]\n{research_text}"
+        if research_text else ""
+    )
+
+    is_buy_question = any(k in question for k in [
+        "사도", "살까", "매수", "사야", "지금", "들어가", "진입",
+        "팔아야", "팔까", "매도", "들고", "홀딩", "보유"
+    ])
+
+    if is_buy_question and detected:
+        verdict_guide = """
+매수/매도 판단 가이드라인:
+- 증권가 컨센서스 요약 (투자의견, 평균 목표주가, upside %)
+- 현재가의 52주 고저 내 위치 → 저점/고점 근접 여부
+- PER/PBR이 업종 평균 대비 저평가/고평가 여부
+- 매크로 환경이 해당 섹터에 우호적/비우호적 여부
+- 리스크 요인 (금리, 환율, 업황 등)
+- 마지막에 명확하게: ✅매수 적극 고려 / ⚠️신중 접근 / ❌현재 비추천 중 하나로 결론"""
+    else:
+        verdict_guide = """
+- 질문의 핵심에 직접 답변
+- 데이터와 논리를 근거로 설명"""
+
     prompt = f"""당신은 한국 주식/투자 전문 비서입니다.
-사용자의 질문에 현재 시황을 반영하여 전문적으로 답변하세요.
+아래 실시간 데이터와 증권사 리포트, 매크로 환경을 종합하여 답변하세요.
 
 [현재 매크로 환경]
 {macro_text}
 
 [최근 주요 뉴스]
 {news_text}
+{research_section}
 
 [사용자 질문]
 {question}
 
 답변 지침:
-- 현재 시장 환경과 연결해서 설명
-- 특정 종목 질문이면 기술적/펀더멘털 양면 언급
-- 금리/환율/유가 등 매크로 영향 포함
-- 투자 결정은 본인 책임임을 마지막에 한 줄 언급
-- 한국어, 600자 이내"""
+{verdict_guide}
+- 수치와 근거를 구체적으로 제시
+- 투자 결정은 본인 책임임을 마지막 한 줄에 언급
+- 한국어, 700자 이내"""
 
     reply = claude().messages.create(
-        model="claude-sonnet-4-6", max_tokens=1500,
+        model="claude-sonnet-4-6", max_tokens=1800,
         messages=[{"role": "user", "content": prompt}]
     ).content[0].text
 
