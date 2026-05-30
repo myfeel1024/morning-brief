@@ -33,6 +33,61 @@ from telegram.ext import (
 from stock_research import research_stock
 
 
+# ── 메시지 분할 & 안전 전송 헬퍼 ────────────────────────────────
+
+def smart_split(text: str, max_len: int = 3800) -> list[str]:
+    """
+    줄바꿈 단위로 자연스럽게 분할.
+    절대 문장/단어/Markdown 태그 중간에서 자르지 않음.
+    """
+    if len(text) <= max_len:
+        return [text]
+
+    chunks, current, current_len = [], [], 0
+
+    for line in text.split("\n"):
+        line_len = len(line) + 1  # +1 = 줄바꿈 문자
+
+        if current_len + line_len > max_len and current:
+            chunks.append("\n".join(current))
+            current, current_len = [line], line_len
+        else:
+            current.append(line)
+            current_len += line_len
+
+    if current:
+        chunks.append("\n".join(current))
+
+    return chunks
+
+
+async def safe_send(target, text: str, edit: bool = False) -> None:
+    """
+    Markdown으로 전송 시도 → 실패하면 plain text로 재시도.
+    4000자 초과 시 단락 단위로 자동 분할 전송.
+    """
+    chunks = smart_split(text)
+
+    for i, chunk in enumerate(chunks):
+        is_first = (i == 0)
+        try:
+            if is_first and edit:
+                await target.edit_text(chunk, parse_mode="Markdown")
+            else:
+                await target.reply_text(chunk, parse_mode="Markdown")
+        except Exception:
+            # Markdown 파싱 오류 → plain text 재시도
+            try:
+                # Markdown 특수문자 제거 후 전송
+                clean = chunk.replace("*", "").replace("`", "").replace("_", "")
+                if is_first and edit:
+                    await target.edit_text(clean)
+                else:
+                    await target.reply_text(clean)
+            except Exception:
+                pass
+
+
 # ── 환경변수 로드 ─────────────────────────────────────────────
 
 def _load_env_file():
@@ -210,7 +265,7 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"```\n{macro_text}\n```\n\n"
         f"🤖 *AI 분석*\n{reply_text}"
     )
-    await msg.edit_text(full, parse_mode="Markdown")
+    await safe_send(msg, full, edit=True)
 
 
 # ── /brief (모닝 브리핑 수동 실행) ───────────────────────────
@@ -440,13 +495,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         reply = f"🔍 *이미지 분석*\n\n{analysis.content[0].text}"
 
-    # 메시지 분할 전송 (4000자 초과 시)
     tmp_path.unlink(missing_ok=True)
-
-    chunks = [reply[i:i+4000] for i in range(0, len(reply), 4000)]
-    await msg.edit_text(chunks[0], parse_mode="Markdown")
-    for chunk in chunks[1:]:
-        await update.message.reply_text(chunk, parse_mode="Markdown")
+    await safe_send(msg, reply, edit=True)
 
 
 # ── 텍스트 질문 처리 ──────────────────────────────────────────
@@ -551,7 +601,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         messages=[{"role": "user", "content": prompt}]
     ).content[0].text
 
-    await msg.edit_text(f"💬 {reply}", parse_mode="Markdown")
+    await safe_send(msg, f"💬 {reply}", edit=True)
 
 
 # ── 봇 실행 ───────────────────────────────────────────────────
