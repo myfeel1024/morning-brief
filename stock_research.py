@@ -157,6 +157,67 @@ def get_naver_stock_news(stock_code: str, n: int = 5) -> list[str]:
         return []
 
 
+# ── 국내 경제/증시 뉴스 (RSS 멀티소스) ──────────────────────────
+
+# 국내 주요 경제지 RSS 피드 목록
+_KR_NEWS_RSS = [
+    # 연합뉴스 경제
+    ("연합뉴스", "https://www.yna.co.kr/rss/economy.xml"),
+    # 한국경제
+    ("한국경제", "https://www.hankyung.com/feed/economy"),
+    # 매일경제
+    ("매일경제", "https://www.mk.co.kr/rss/30200030/"),
+    # 머니투데이
+    ("머니투데이", "https://rss.mt.co.kr/mt_news_eco.xml"),
+]
+
+def _parse_rss(url: str, source: str, n: int = 4) -> list[str]:
+    """단일 RSS 피드에서 헤드라인 파싱"""
+    try:
+        res = requests.get(url, timeout=8,
+                           headers={"User-Agent": "Mozilla/5.0"})
+        res.encoding = "utf-8"
+        root = ET.fromstring(res.content)
+        items = root.findall(".//item")
+        results = []
+        for item in items[:n]:
+            title_el = item.find("title")
+            if title_el is not None and title_el.text:
+                title = title_el.text.strip()
+                if title and len(title) > 5:
+                    results.append(f"{title} ({source})")
+        return results
+    except Exception:
+        return []
+
+
+def fetch_korean_news(n: int = 8) -> list[str]:
+    """
+    국내 경제/증시 뉴스 수집.
+    RSS 피드 → 실패 시 Google News RSS 폴백.
+    """
+    seen, results = set(), []
+
+    # 1차: 국내 경제지 RSS
+    for source, url in _KR_NEWS_RSS:
+        for item in _parse_rss(url, source, n=3):
+            if item not in seen and len(results) < n:
+                seen.add(item)
+                results.append(item)
+        if len(results) >= n:
+            break
+
+    # 2차: 부족하면 Google News RSS (한국어) 보충
+    if len(results) < n:
+        for query in ["코스피 코스닥 증시", "한국은행 금리 환율 물가"]:
+            for item in get_google_news(query, n=4):
+                if item not in seen and len(results) < n:
+                    seen.add(item)
+                    results.append(item)
+
+    return results
+
+
 # ── 한국 주식 실시간 데이터 (yfinance .KS/.KQ) ───────────────
 
 def get_kr_stock_realtime(stock_code: str) -> dict:

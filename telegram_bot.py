@@ -30,7 +30,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes,
 )
-from stock_research import research_stock
+from stock_research import research_stock, fetch_korean_news
 
 
 # ── 메시지 분할 & 안전 전송 헬퍼 ────────────────────────────────
@@ -262,10 +262,15 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     macro      = get_macro_context()
     macro_text = format_macro(macro)
     news_list  = fetch_recent_news()
-    news_text  = "\n".join(news_list[:5]) if news_list else "뉴스 없음"
+    kr_news    = fetch_korean_news(n=5)
+    news_text  = (
+        "[해외 뉴스]\n" + "\n".join(news_list[:4])
+        + "\n\n[국내 뉴스]\n" + "\n".join(kr_news)
+        if (news_list or kr_news) else "뉴스 없음"
+    )
 
     prompt = f"""당신은 한국 주식시장 전문 애널리스트입니다.
-아래 현재 시장 데이터와 뉴스를 바탕으로 지금 이 순간의 시황을 분석해주세요.
+아래 현재 시장 데이터와 해외·국내 뉴스를 모두 반영하여 지금 이 순간의 시황을 분석해주세요.
 
 [현재 시장 지표]
 {macro_text}
@@ -590,11 +595,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id  = update.effective_chat.id
     msg      = await update.message.reply_text("💭 분석 중...")
 
-    # ── 매크로 & 뉴스 ──
+    # ── 매크로 & 뉴스 (해외 + 국내) ──
     macro      = get_macro_context()
     macro_text = format_macro(macro)
     news_list  = fetch_recent_news(n=4)
-    news_text  = "\n".join(news_list) if news_list else ""
+    kr_news    = fetch_korean_news(n=4)
+    news_text  = (
+        "[해외 뉴스]\n" + "\n".join(news_list)
+        + ("\n\n[국내 뉴스]\n" + "\n".join(kr_news) if kr_news else "")
+    )
 
     # ── 종목 감지 → 실시간 데이터 + 증권사 리포트 ──
     detected      = _detect_stocks_in_text(question)
