@@ -36,56 +36,80 @@ from stock_research import research_stock
 # ── 메시지 분할 & 안전 전송 헬퍼 ────────────────────────────────
 
 def smart_split(text: str, max_len: int = 3800) -> list[str]:
-    """
-    줄바꿈 단위로 자연스럽게 분할.
-    절대 문장/단어/Markdown 태그 중간에서 자르지 않음.
-    """
+    """줄바꿈 단위로 자연스럽게 분할 — Markdown 태그 중간에서 자르지 않음."""
     if len(text) <= max_len:
         return [text]
 
     chunks, current, current_len = [], [], 0
-
     for line in text.split("\n"):
-        line_len = len(line) + 1  # +1 = 줄바꿈 문자
-
+        line_len = len(line) + 1
         if current_len + line_len > max_len and current:
             chunks.append("\n".join(current))
             current, current_len = [line], line_len
         else:
             current.append(line)
             current_len += line_len
-
     if current:
         chunks.append("\n".join(current))
-
     return chunks
 
 
-async def safe_send(target, text: str, edit: bool = False) -> None:
+async def safe_send(bot_msg, text: str,
+                    edit: bool = False,
+                    user_msg=None) -> None:
     """
-    Markdown으로 전송 시도 → 실패하면 plain text로 재시도.
-    4000자 초과 시 단락 단위로 자동 분할 전송.
+    분할 + 안전 전송.
+    - 첫 청크: bot_msg 를 edit (edit=True) 또는 reply
+    - 후속 청크: user_msg(원본 사용자 메시지)에 reply → 자연스러운 흐름
+    - Markdown 실패 시 plain text 자동 재시도
     """
-    chunks = smart_split(text)
+    chunks       = smart_split(text)
+    reply_target = user_msg if user_msg else bot_msg  # 후속 청크 전송 대상
 
     for i, chunk in enumerate(chunks):
-        is_first = (i == 0)
+        # ── 전송 시도 (Markdown) ──
         try:
-            if is_first and edit:
-                await target.edit_text(chunk, parse_mode="Markdown")
+            if i == 0 and edit:
+                await bot_msg.edit_text(chunk, parse_mode="Markdown")
             else:
-                await target.reply_text(chunk, parse_mode="Markdown")
+                await reply_target.reply_text(chunk, parse_mode="Markdown")
+            continue
         except Exception:
-            # Markdown 파싱 오류 → plain text 재시도
-            try:
-                # Markdown 특수문자 제거 후 전송
-                clean = chunk.replace("*", "").replace("`", "").replace("_", "")
-                if is_first and edit:
-                    await target.edit_text(clean)
-                else:
-                    await target.reply_text(clean)
-            except Exception:
-                pass
+            pass
+
+        # ── Markdown 실패 → plain text 재시도 ──
+        clean = (chunk.replace("*", "").replace("`", "")
+                      .replace("_", "").replace("[", "").replace("]", ""))
+        try:
+            if i == 0 and edit:
+                await bot_msg.edit_text(clean)
+            else:
+                await reply_target.reply_text(clean)
+        except Exception:
+            pass
+
+
+# ── 대화 메모리 (채팅별 최근 5회 기억) ────────────────────────
+
+from collections import defaultdict
+
+_conv: dict[int, list[dict]] = defaultdict(list)
+_MAX_TURNS = 5   # 최근 5회 질문/답변 유지
+
+
+def _history(chat_id: int) -> list[dict]:
+    return list(_conv[chat_id])
+
+
+def _save(chat_id: int, role: str, content: str) -> None:
+    _conv[chat_id].append({"role": role, "content": content})
+    # 최대 turns*2 개 유지
+    if len(_conv[chat_id]) > _MAX_TURNS * 2:
+        _conv[chat_id] = _conv[chat_id][-_MAX_TURNS * 2:]
+
+
+def _clear(chat_id: int) -> None:
+    _conv[chat_id] = []
 
 
 # ── 환경변수 로드 ─────────────────────────────────────────────
@@ -211,6 +235,7 @@ def fetch_recent_news(query: str = None, n: int = 5) -> list[str]:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update):
         return
+    _clear(update.effective_chat.id)   # 새 대화 시작 시 히스토리 초기화
     await update.message.reply_text(
         "👋 *안녕하세요! 나만의 증시 비서입니다.*\n\n"
         "📸 *이미지 전송:*\n"
@@ -265,7 +290,7 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"```\n{macro_text}\n```\n\n"
         f"🤖 *AI 분석*\n{reply_text}"
     )
-    await safe_send(msg, full, edit=True)
+    await safe_send(msg, full, edit=True, user_msg=update.message)
 
 
 # ── /brief (모닝 브리핑 수동 실행) ───────────────────────────
@@ -496,7 +521,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = f"🔍 *이미지 분석*\n\n{analysis.content[0].text}"
 
     tmp_path.unlink(missing_ok=True)
-    await safe_send(msg, reply, edit=True)
+
+    # 대화 메모리에 저장 (후속 질문 연계용)
+    chat_id = update.effective_chat.id
+    _save(chat_id, "user", f"[이미지 분석 요청: {img_type}]")
+    _save(chat_id, "assistant", reply[:800])   # 요약본만 저장
+
+    await safe_send(msg, reply, edit=True, user_msg=update.message)
 
 
 # ── 텍스트 질문 처리 ──────────────────────────────────────────
@@ -531,6 +562,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     question = update.message.text.strip()
+    chat_id  = update.effective_chat.id
     msg      = await update.message.reply_text("💭 분석 중...")
 
     # ── 매크로 & 뉴스 ──
@@ -539,10 +571,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     news_list  = fetch_recent_news(n=4)
     news_text  = "\n".join(news_list) if news_list else ""
 
-    # ── 종목 감지 → 실시간 데이터 + 증권사 리포트 수집 ──
-    detected   = _detect_stocks_in_text(question)
+    # ── 종목 감지 → 실시간 데이터 + 증권사 리포트 ──
+    detected      = _detect_stocks_in_text(question)
     research_text = ""
-
     if detected:
         await msg.edit_text(f"🔍 {', '.join(detected)} 데이터 수집 중...")
         parts = []
@@ -552,56 +583,56 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parts.append(data)
         research_text = "\n\n".join(parts)
 
-    # ── 프롬프트 구성 ──
-    research_section = (
-        f"\n[종목 실시간 데이터 & 증권사 리포트]\n{research_text}"
-        if research_text else ""
+    # ── 매수/매도 판단 여부 ──
+    is_buy_q = any(k in question for k in [
+        "사도", "살까", "매수", "사야", "지금", "들어가", "진입",
+        "팔아야", "팔까", "매도", "들고", "홀딩", "보유",
+    ])
+    verdict_guide = (
+        """매수/매도 판단:
+- 증권가 컨센서스 (목표주가, upside %)
+- 52주 내 현재가 위치 (저점/고점 근접 여부)
+- PER/PBR 업종 대비 수준
+- 매크로 섹터 영향
+- 마지막에 반드시: ✅매수 적극 고려 / ⚠️신중 접근 / ❌현재 비추천"""
+        if (is_buy_q and detected) else
+        "질문의 핵심에 직접 답변하고 수치와 근거를 제시하세요."
     )
 
-    is_buy_question = any(k in question for k in [
-        "사도", "살까", "매수", "사야", "지금", "들어가", "진입",
-        "팔아야", "팔까", "매도", "들고", "홀딩", "보유"
-    ])
-
-    if is_buy_question and detected:
-        verdict_guide = """
-매수/매도 판단 가이드라인:
-- 증권가 컨센서스 요약 (투자의견, 평균 목표주가, upside %)
-- 현재가의 52주 고저 내 위치 → 저점/고점 근접 여부
-- PER/PBR이 업종 평균 대비 저평가/고평가 여부
-- 매크로 환경이 해당 섹터에 우호적/비우호적 여부
-- 리스크 요인 (금리, 환율, 업황 등)
-- 마지막에 명확하게: ✅매수 적극 고려 / ⚠️신중 접근 / ❌현재 비추천 중 하나로 결론"""
-    else:
-        verdict_guide = """
-- 질문의 핵심에 직접 답변
-- 데이터와 논리를 근거로 설명"""
-
-    prompt = f"""당신은 한국 주식/투자 전문 비서입니다.
-아래 실시간 데이터와 증권사 리포트, 매크로 환경을 종합하여 답변하세요.
+    # ── 시스템 프롬프트 (매번 최신 매크로 반영) ──
+    system_prompt = f"""당신은 한국 주식/투자 전문 비서입니다.
+이전 대화 맥락을 기억하고 이어서 답변하세요.
 
 [현재 매크로 환경]
 {macro_text}
 
 [최근 주요 뉴스]
 {news_text}
-{research_section}
-
-[사용자 질문]
-{question}
+{"[종목 실시간 데이터 & 증권사 리포트]" + chr(10) + research_text if research_text else ""}
 
 답변 지침:
 {verdict_guide}
 - 수치와 근거를 구체적으로 제시
+- 이전 대화에서 언급된 종목/주제가 있으면 자연스럽게 연결
 - 투자 결정은 본인 책임임을 마지막 한 줄에 언급
 - 한국어, 700자 이내"""
 
+    # ── 대화 히스토리 + 현재 질문으로 Claude 호출 ──
+    history  = _history(chat_id)
+    messages = history + [{"role": "user", "content": question}]
+
     reply = claude().messages.create(
-        model="claude-sonnet-4-6", max_tokens=1800,
-        messages=[{"role": "user", "content": prompt}]
+        model="claude-sonnet-4-6",
+        max_tokens=1800,
+        system=system_prompt,
+        messages=messages,
     ).content[0].text
 
-    await safe_send(msg, f"💬 {reply}", edit=True)
+    # ── 히스토리 저장 ──
+    _save(chat_id, "user",      question)
+    _save(chat_id, "assistant", reply)
+
+    await safe_send(msg, f"💬 {reply}", edit=True, user_msg=update.message)
 
 
 # ── 봇 실행 ───────────────────────────────────────────────────
