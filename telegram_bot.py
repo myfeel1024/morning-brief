@@ -18,7 +18,7 @@ import os
 import base64
 import json
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as dtime
 from pathlib import Path
 import tempfile
 
@@ -291,6 +291,31 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤖 *AI 분석*\n{reply_text}"
     )
     await safe_send(msg, full, edit=True, user_msg=update.message)
+
+
+# ── 자동 모닝 브리핑 (매일 07:50 KST) ───────────────────────
+
+KST = timezone(timedelta(hours=9))
+
+async def job_morning_brief(context) -> None:
+    """Railway job_queue 가 매일 07:50 KST 에 자동 호출"""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "morning_brief",
+            Path(__file__).resolve().parent / "morning_brief.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.run_morning_brief()
+    except Exception as e:
+        try:
+            await context.bot.send_message(
+                chat_id=int(AUTHORIZED_CHAT),
+                text=f"⚠️ 자동 브리핑 실패: {e}"
+            )
+        except Exception:
+            pass
 
 
 # ── /brief (모닝 브리핑 수동 실행) ───────────────────────────
@@ -647,10 +672,18 @@ def main():
     app.add_handler(CommandHandler("help",   cmd_start))
     app.add_handler(CommandHandler("market", cmd_market))
     app.add_handler(CommandHandler("brief",  cmd_brief))
-    app.add_handler(MessageHandler(filters.PHOTO,                  handle_photo))
+    app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 증시 비서 봇 시작!")
+    # ── 매일 07:50 KST 자동 모닝 브리핑 ──
+    app.job_queue.run_daily(
+        job_morning_brief,
+        time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
+        name="morning_brief_daily",
+    )
+
+    now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now_kst} KST] 증시 비서 봇 시작! (모닝 브리핑: 매일 07:50 KST)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
