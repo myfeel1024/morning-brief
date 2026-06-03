@@ -35,8 +35,8 @@ from stock_research import research_stock, fetch_korean_news
 
 # ── 메시지 분할 & 안전 전송 헬퍼 ────────────────────────────────
 
-def smart_split(text: str, max_len: int = 3800) -> list[str]:
-    """줄바꿈 단위로 자연스럽게 분할 — Markdown 태그 중간에서 자르지 않음."""
+def smart_split(text: str, max_len: int = 1500) -> list[str]:
+    """줄바꿈 단위로 자연스럽게 분할 — 단락 중간에서 자르지 않음."""
     if len(text) <= max_len:
         return [text]
 
