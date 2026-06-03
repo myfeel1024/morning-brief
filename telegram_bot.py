@@ -62,31 +62,35 @@ async def safe_send(bot_msg, text: str,
     - 첫 청크: bot_msg 를 edit (edit=True) 또는 reply
     - 후속 청크: user_msg(원본 사용자 메시지)에 reply → 자연스러운 흐름
     - Markdown 실패 시 plain text 자동 재시도
+    - 청크 간 0.5초 딜레이로 Telegram 속도 제한 방지
     """
+    import asyncio
+
     chunks       = smart_split(text)
-    reply_target = user_msg if user_msg else bot_msg  # 후속 청크 전송 대상
+    reply_target = user_msg if user_msg else bot_msg
 
     for i, chunk in enumerate(chunks):
-        # ── 전송 시도 (Markdown) ──
-        try:
-            if i == 0 and edit:
-                await bot_msg.edit_text(chunk, parse_mode="Markdown")
-            else:
-                await reply_target.reply_text(chunk, parse_mode="Markdown")
-            continue
-        except Exception:
-            pass
+        if i > 0:
+            await asyncio.sleep(0.5)   # 연속 전송 속도 제한 방지
 
-        # ── Markdown 실패 → plain text 재시도 ──
-        clean = (chunk.replace("*", "").replace("`", "")
-                      .replace("_", "").replace("[", "").replace("]", ""))
+        sent = False
+
+        # ── 1차: plain text로 직접 전송 (가장 안전) ──
         try:
             if i == 0 and edit:
-                await bot_msg.edit_text(clean)
+                await bot_msg.edit_text(chunk)
             else:
-                await reply_target.reply_text(clean)
-        except Exception:
-            pass
+                await reply_target.reply_text(chunk)
+            sent = True
+        except Exception as e:
+            print(f"[safe_send] 청크 {i} 전송 실패: {e}")
+
+        # ── 2차: 실패 시 bot_msg 기준으로 재시도 ──
+        if not sent:
+            try:
+                await bot_msg.reply_text(chunk)
+            except Exception as e2:
+                print(f"[safe_send] 청크 {i} 재시도도 실패: {e2}")
 
 
 # ── 대화 메모리 (채팅별 최근 5회 기억) ────────────────────────
@@ -440,7 +444,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 마지막에 전체 포트폴리오 관점에서 리스크 분산 및 오늘의 전략을 한 문단으로 요약.
 
-한국어로 작성. 각 종목 350자 이내."""
+텔레그램 메시지용 포맷 규칙:
+- 마크다운 헤더(#, ##), 볼드(**), 수평선(---) 사용 금지
+- 이모지 + 일반 텍스트로 구분
+- 한국어로 작성. 각 종목 300자 이내."""
 
         analysis = client.messages.create(
             model="claude-sonnet-4-6", max_tokens=3000,
@@ -477,35 +484,35 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 [현재 매크로 환경]
 {macro_text}
 
-다음 항목을 분석하세요:
+아래 순서로 분석하세요. 텔레그램 메시지용이므로 반드시 다음 규칙을 지키세요:
+- 제목은 이모지 + 일반 텍스트 사용 (예: 📈 추세 분석)
+- 마크다운 헤더(#, ##, ###), 볼드(**), 수평선(---) 절대 사용 금지
+- 핵심만 간결하게, 전체 1000자 이내
 
-📈 **추세 분석**
+📈 추세 분석
 - 현재 주추세 (상승/하락/횡보)
 - 단기/중기 추세선 상태
 - 최근 고점/저점 패턴
 
-☁️ **일목균형표 분석** (차트에 표시된 경우)
-- 구름대(선행스팬) 위/아래 여부 → 강세/약세 판단
+☁️ 일목균형표 분석 (차트에 표시된 경우)
+- 구름대 위/아래 여부 → 강세/약세 판단
 - 전환선(9일)과 기준선(26일) 크로스 여부
-- 후행스팬 위치
-- 삼역 호전/역전 여부
+- 후행스팬 위치 및 삼역 호전/역전 여부
 
-🎯 **지지 & 저항**
+🎯 지지 & 저항
 - 강한 지지 구간 (가격대 명시)
 - 강한 저항 구간 (가격대 명시)
 - 돌파 시 다음 목표가
 
-📊 **보조 지표** (보이는 경우)
-- 거래량 분석
-- RSI/MACD/볼린저밴드 등 상태
+📊 보조 지표 (보이는 경우)
+- 거래량 분석, RSI/MACD/볼린저밴드 상태
 
-🔮 **향후 시나리오**
+🔮 향후 시나리오
 - 상승 시나리오: 조건과 목표가
 - 하락 시나리오: 조건과 손절선
-- 가장 가능성 높은 시나리오
 
-💡 **투자 전략**
-- 현재 포지션 권고 (매수/관망/매도)
+💡 투자 전략
+- 포지션 권고 (매수/관망/매도)
 - 진입가 / 목표가 / 손절가
 
 한국어로 작성."""
