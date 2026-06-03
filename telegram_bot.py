@@ -35,7 +35,7 @@ from stock_research import research_stock, fetch_korean_news
 
 # ── 메시지 분할 & 안전 전송 헬퍼 ────────────────────────────────
 
-def smart_split(text: str, max_len: int = 1500) -> list[str]:
+def smart_split(text: str, max_len: int = 2500) -> list[str]:
     """줄바꿈 단위로 자연스럽게 분할 — 단락 중간에서 자르지 않음."""
     if len(text) <= max_len:
         return [text]
@@ -447,7 +447,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 텔레그램 메시지용 포맷 규칙:
 - 마크다운 헤더(#, ##), 볼드(**), 수평선(---) 사용 금지
 - 이모지 + 일반 텍스트로 구분
-- 한국어로 작성. 각 종목 300자 이내."""
+- 각 종목 충분히 상세하게 작성 (분량 제한 없음, 여러 메시지로 자동 분할됨)
+- 한국어로 작성."""
 
         analysis = client.messages.create(
             model="claude-sonnet-4-6", max_tokens=3000,
@@ -484,10 +485,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 [현재 매크로 환경]
 {macro_text}
 
-아래 순서로 분석하세요. 텔레그램 메시지용이므로 반드시 다음 규칙을 지키세요:
+아래 순서로 자세히 분석하세요. 텔레그램 메시지용 포맷 규칙:
 - 제목은 이모지 + 일반 텍스트 사용 (예: 📈 추세 분석)
 - 마크다운 헤더(#, ##, ###), 볼드(**), 수평선(---) 절대 사용 금지
-- 핵심만 간결하게, 전체 1000자 이내
+- 각 항목을 충분히 상세하게 작성 (분량 제한 없음, 여러 메시지로 자동 분할 전송됨)
 
 📈 추세 분석
 - 현재 주추세 (상승/하락/횡보)
@@ -656,7 +657,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - 수치와 근거를 구체적으로 제시
 - 이전 대화에서 언급된 종목/주제가 있으면 자연스럽게 연결
 - 투자 결정은 본인 책임임을 마지막 한 줄에 언급
-- 한국어, 700자 이내"""
+- 한국어, 충분히 상세하게 (분량 제한 없음, 길면 자동으로 여러 메시지로 분할됨)"""
 
     # ── 대화 히스토리 + 현재 질문으로 Claude 호출 ──
     history  = _history(chat_id)
