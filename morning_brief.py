@@ -163,25 +163,33 @@ def get_market_data_for_ai():
 
 # ── 2. 뉴스 수집 (NewsAPI) ────────────────────────────────────
 
-def fetch_news(query: str = None, max_articles: int = 7):
-    """NewsAPI에서 경제·금리·물가·지정학 뉴스 수집 (신뢰 매체만)"""
+def fetch_news(query: str = None, max_articles: int = 9):
+    """NewsAPI에서 경제·실적·금리·물가·지정학 뉴스 수집 (금융 전문지만)"""
     if not NEWS_API_KEY:
         return ["NewsAPI 키 미설정 — .env 파일에 NEWS_API_KEY를 입력하세요."]
 
-    # 경제지표 + 통화정책 + 지정학 리스크 쿼리
+    # 경제지표 + 기업실적 + 통화정책 + 지정학 리스크 쿼리
     if query is None:
         query = (
-            "Fed OR inflation OR \"interest rate\" OR CPI OR PPI "
+            "Fed OR \"interest rate\" OR inflation OR CPI OR PPI OR \"Treasury yield\" "
+            "OR earnings OR revenue OR \"earnings surprise\" OR \"earnings beat\" OR \"earnings miss\" "
             "OR recession OR tariff OR \"trade war\" "
-            "OR war OR Ukraine OR Gaza OR Iran OR sanctions OR geopolitics"
+            "OR war OR Ukraine OR Gaza OR Iran OR sanctions OR geopolitics OR \"oil price\""
         )
 
-    # 신뢰할 수 있는 경제·금융 전문 매체만 허용 (군사·연예·잡지 제외)
+    # 경제·금융 전문지만 허용 (일반 뉴스·정치 매체 제외)
     trusted_domains = (
-        "reuters.com,apnews.com,bloomberg.com,wsj.com,"
-        "ft.com,cnbc.com,marketwatch.com,economist.com,"
-        "axios.com,politico.com,thehill.com,npr.org"
+        "reuters.com,bloomberg.com,wsj.com,ft.com,"
+        "cnbc.com,marketwatch.com,economist.com,"
+        "barrons.com,seekingalpha.com,apnews.com"
     )
+
+    # 무의미한 헤드라인 필터 키워드
+    skip_keywords = [
+        "morning briefing", "daily briefing", "news briefing",
+        "what to know", "what's happening", "here's what",
+        "today in", "this week in", "roundup",
+    ]
 
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
     url = (
@@ -200,11 +208,17 @@ def fetch_news(query: str = None, max_articles: int = 7):
         if data.get("status") != "ok":
             return [f"뉴스 API 오류: {data.get('message', '알 수 없음')}"]
         articles = data.get("articles", [])
-        return [
-            f"{a['title']} ({a.get('source', {}).get('name', '')})"
-            for a in articles
-            if a.get("title")
-        ]
+        results = []
+        for a in articles:
+            title = a.get("title", "")
+            if not title:
+                continue
+            # 무의미한 헤드라인 제외
+            if any(kw in title.lower() for kw in skip_keywords):
+                continue
+            source = a.get("source", {}).get("name", "")
+            results.append(f"{title} ({source})")
+        return results if results else [f"관련 뉴스를 찾을 수 없습니다."]
     except Exception as e:
         return [f"뉴스 수집 실패: {e}"]
 
@@ -277,13 +291,17 @@ def analyze_with_claude(market_data: dict, news_list: list, portfolio: list = No
 {news_text}
 {portfolio_section}
 
-아래 형식으로 한국어로 작성하세요 (텔레그램 전송용, 총 400자 내외):
+아래 형식으로 한국어로 작성하세요 (텔레그램 전송용, 총 500자 내외):
 
 ① 간밤 한 줄 요약
-② 핵심 매크로 포인트 (금리/달러/유가 중 가장 중요한 것 1~2개)
-③ 주목 섹터 (코스피 관점에서 오늘 강세/약세 예상 섹터)
-④ 오늘의 코스피 전략 한 줄
-⑤ 리스크 요인 (있다면)
+② 핵심 매크로 포인트
+   - 미 10년물 국채금리 수준과 방향 (반드시 포함)
+   - 달러/원 환율 영향
+   - 유가·원자재 이슈 (해당 시)
+③ 주요 기업 실적 (어닝 서프라이즈/쇼크 있으면 반드시 언급)
+④ 주목 섹터 (코스피 관점에서 오늘 강세/약세 예상 섹터)
+⑤ 오늘의 코스피 전략 한 줄
+⑥ 리스크 요인 (있다면)
 """
 
     try:
