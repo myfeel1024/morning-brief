@@ -1,0 +1,32 @@
+name: 텔레그램 봇 (상시 대기)
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # 10분마다 실행 (Public 저장소 무제한 무료)
+  workflow_dispatch:           # 수동 테스트용
+
+jobs:
+  check-commands:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8         # 10분 주기보다 짧게 설정
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 패키지 설치
+        run: pip install yfinance requests anthropic pykrx numpy pandas
+
+      - name: 명령어 확인 및 처리
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          NEWS_API_KEY:       ${{ secrets.NEWS_API_KEY }}
+        run: python actions_bot.py
