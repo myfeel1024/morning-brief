@@ -152,9 +152,21 @@ def handle_market(chat_id: str) -> None:
         tg_send(chat_id, f"❌ 시황 조회 실패: {e}")
 
 
+def handle_portfolio(chat_id: str) -> None:
+    tg_send(chat_id, "⏳ 포트폴리오 현황 조회 중...")
+    try:
+        from quant_portfolio import get_portfolio_status, next_rebalance_date
+        status = get_portfolio_status()
+        next_r = next_rebalance_date()
+        tg_send(chat_id, f"{status}\n\n📅 다음 리밸런싱 권장일: {next_r}")
+    except Exception as e:
+        tg_send(chat_id, f"❌ 포트폴리오 조회 실패: {e}")
+
+
 HANDLERS = {
-    "/quant":  lambda chat_id, args: handle_quant(chat_id, args),
-    "/market": lambda chat_id, args: handle_market(chat_id),
+    "/quant":     lambda chat_id, args: handle_quant(chat_id, args),
+    "/market":    lambda chat_id, args: handle_market(chat_id),
+    "/portfolio": lambda chat_id, args: handle_portfolio(chat_id),
 }
 
 
