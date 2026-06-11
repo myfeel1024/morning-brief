@@ -62,6 +62,9 @@ def get_recent_commands() -> list[dict]:
     data = tg_get("getUpdates", limit=100, timeout=0)
     updates = data.get("result", [])
 
+    print(f"  [DEBUG] getUpdates 응답: ok={data.get('ok')}, 업데이트 수={len(updates)}")
+    print(f"  [DEBUG] 설정된 CHAT_ID: '{CHAT_ID}'")
+
     now    = datetime.now(timezone.utc).timestamp()
     cmds   = []
 
@@ -72,9 +75,16 @@ def get_recent_commands() -> list[dict]:
         text    = msg.get("text", "")
         chat_id = str(msg.get("chat", {}).get("id", ""))
         ts      = msg.get("date", 0)
+        age_sec = now - ts
+
+        # 전체 메시지 현황 출력 (최근 30분 이내)
+        if age_sec < 1800:
+            print(f"  [DEBUG] 메시지: chat_id={chat_id}, age={age_sec:.0f}s, text='{text[:30]}'")
 
         # 허가된 채팅 + 시간 윈도우 필터
         if chat_id != str(CHAT_ID):
+            if text.startswith("/"):
+                print(f"  [DEBUG] CHAT_ID 불일치 → 수신={chat_id}, 기대={CHAT_ID}")
             continue
         if now - ts > WINDOW_SEC:
             continue
