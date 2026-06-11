@@ -246,9 +246,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 아무 질문이나 입력하면 시황 반영 답변\n"
         "• 예) '삼성전자 지금 사도 될까?' '나스닥 전망은?'\n\n"
         "📌 *명령어:*\n"
-        "/market — 현재 시황 즉시 요약\n"
-        "/brief  — 모닝 브리핑 즉시 실행\n"
-        "/help   — 도움말",
+        "/market    — 현재 시황 즉시 요약\n"
+        "/brief     — 모닝 브리핑 즉시 실행\n"
+        "/quant     — 퀀트 신호 + AI 종목 추천\n"
+        "  예) /quant KOSDAQ 15\n"
+        "/portfolio — 보유 종목 현황 + 수익률\n"
+        "/rebalance — 리밸런싱 계산\n"
+        "  예) /rebalance 10 apply  (저장까지)\n"
+        "/help      — 도움말",
         parse_mode="Markdown",
     )
 
@@ -384,7 +389,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     '"stocks":["종목1",...],'
                     '"chart_stock":"종목명 (chart일 때)",'
                     '"chart_period":"기간 (chart일 때, 예: 3개월)",'
-                    '"indicators":"보이는 지표 (chart일 때, 예: 일목균형표,MACD)"}'
+                    '"indicators":"보이는 지표 (chart일 때, 예: 일목균형표,MACD,볼린저밴드)",'
+                    '"bb_position":"볼린저밴드 위치 (상단근처/중간/하단근처/하단이탈/없음)"}'
                 )}
             ]
         }]
@@ -394,12 +400,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raw      = detect.content[0].text.strip().replace("```json","").replace("```","")
         detected = json.loads(raw)
     except Exception:
-        detected = {"type": "other", "stocks": [], "chart_stock": "", "indicators": ""}
+        detected = {"type": "other", "stocks": [], "chart_stock": "", "indicators": "", "bb_position": "없음"}
 
     img_type     = detected.get("type", "other")
     stocks       = detected.get("stocks", [])
     chart_stock  = detected.get("chart_stock", "")
     indicators   = detected.get("indicators", "")
+    bb_position  = detected.get("bb_position", "없음")
 
     # ── Step 2: 유형별 분석 ──
 
@@ -472,12 +479,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 차트 기술적 분석
         stock_info = f"종목: {chart_stock}" if chart_stock else ""
         ind_info   = f"확인된 지표: {indicators}" if indicators else ""
+        bb_info    = f"볼린저밴드 현재 위치: {bb_position}" if bb_position and bb_position != "없음" else ""
 
         prompt = f"""당신은 기술적 분석 전문가입니다.
 이 차트를 세밀하게 분석하세요.
 
 {stock_info}
 {ind_info}
+{bb_info}
 
 [현재 매크로 환경]
 {macro_text}
@@ -503,7 +512,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - 돌파 시 다음 목표가
 
 📊 보조 지표 (보이는 경우)
-- 거래량 분석, RSI/MACD/볼린저밴드 상태
+- 거래량 분석, RSI/MACD 상태
+
+📉 볼린저 밴드 분석 (차트에 표시된 경우)
+- 현재 가격의 밴드 위치 (상단/중간/하단 근처)
+- 하단 밴드 터치 또는 이탈 여부
+  → 하단 터치: 과매도 가능성, 반등 시도 구간인지 확인
+  → 하단 이탈: 강한 하락 추세 or 일시적 과매도 판단
+- 밴드 폭 (수축 중 / 확장 중)
+  → 수축: 변동성 감소, 큰 방향성 이탈 임박 가능
+  → 확장: 추세 강화 중
+- %B 위치 (0 이하 = 하단 이탈, 1 이상 = 상단 이탈)
+- 볼린저 밴드와 일목균형표/이평선 조합 시 시사점
 
 🔮 향후 시나리오
 - 상승 시나리오: 조건과 목표가
@@ -674,6 +694,143 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_send(msg, f"💬 {reply}", edit=True, user_msg=update.message, context=context)
 
 
+# ── /portfolio (보유 현황) ────────────────────────────────────
+
+async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+    msg = await update.message.reply_text("⏳ 포트폴리오 현황 조회 중...")
+    try:
+        from quant_portfolio import get_portfolio_status, next_rebalance_date
+        status = get_portfolio_status()
+        next_r = next_rebalance_date()
+        full   = f"{status}\n\n📅 다음 리밸런싱 권장일: {next_r}"
+        await safe_send(msg, full, edit=True, user_msg=update.message, context=context)
+    except Exception as e:
+        await msg.edit_text(f"❌ 오류: {e}")
+
+
+# ── /rebalance (리밸런싱 실행) ────────────────────────────────
+
+async def cmd_rebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+
+    args_list = context.args  # /rebalance [top_n] [apply]
+    top_n = 10
+    apply = False
+    for arg in (args_list or []):
+        if arg.isdigit():
+            top_n = int(arg)
+        elif arg.lower() == "apply":
+            apply = True
+
+    msg = await update.message.reply_text(
+        f"⏳ 리밸런싱 계산 중... (상위 {top_n}종목)\n"
+        + ("✅ apply 옵션: 완료 후 포트폴리오 자동 저장" if apply else
+           "ℹ️ 계산만 합니다. 실제 저장하려면 /rebalance apply")
+    )
+
+    try:
+        from quant_portfolio import compute_rebalance, apply_rebalance, format_rebalance
+
+        rebal = compute_rebalance(top_n=top_n)
+
+        if apply and "error" not in rebal:
+            apply_rebalance(rebal)
+            saved_note = "\n\n✅ 포트폴리오가 저장되었습니다. /portfolio 로 확인하세요."
+        else:
+            saved_note = "\n\n💡 실제 저장: /rebalance apply"
+
+        result_text = format_rebalance(rebal)
+        now  = datetime.now().strftime("%Y/%m/%d %H:%M")
+        full = (
+            f"🔄 *리밸런싱 검토* `{now}`\n"
+            f"{'─'*36}\n"
+            f"{result_text}"
+            f"{saved_note}"
+        )
+        await safe_send(msg, full, edit=True, user_msg=update.message, context=context)
+
+    except Exception as e:
+        await msg.edit_text(f"❌ 리밸런싱 오류: {e}")
+
+
+# ── /quant (퀀트 신호) ────────────────────────────────────────
+
+async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+
+    args_list = context.args  # /quant [market] [top_n]
+    market  = "KOSPI"
+    top_n   = 10
+
+    for arg in (args_list or []):
+        if arg.upper() in ("KOSPI", "KOSDAQ"):
+            market = arg.upper()
+        elif arg.isdigit():
+            top_n = int(arg)
+
+    msg = await update.message.reply_text(
+        f"⏳ {market} 퀀트 신호 분석 중... (2~3분 소요)\n"
+        f"상위 {top_n}개 종목 팩터 스코어링 + AI 추천"
+    )
+
+    try:
+        from quant_engine import (
+            get_prices_batch, compute_scores, generate_signals,
+            days_ago_str, today_str, KOSPI_SAMPLE,
+        )
+        from quant_ai import get_ai_recommendation
+
+        tickers = KOSPI_SAMPLE  # 속도를 위해 대표 50종목 사용
+        prices  = get_prices_batch(tickers, days_ago_str(200), today_str())
+        if prices.empty:
+            await msg.edit_text("❌ 데이터 수집 실패. 잠시 후 다시 시도하세요.")
+            return
+
+        scores  = compute_scores(prices)
+        signals = generate_signals(scores, top_n=top_n)
+
+        if signals.empty:
+            await msg.edit_text("❌ 팩터 계산 실패.")
+            return
+
+        # 신호 테이블
+        lines = []
+        for ticker, row in signals.head(top_n).iterrows():
+            icon  = {"BUY": "🟢", "SELL": "🔴", "NEUTRAL": "⚪"}.get(row["signal"], "⚪")
+            mom3m = scores.loc[ticker, "mom3m"] if "mom3m" in scores.columns and ticker in scores.index else None
+            mom_s = f"{mom3m*100:+.0f}%" if mom3m is not None and mom3m == mom3m else "N/A"
+            lines.append(
+                f"{int(row['rank']):2}. {str(row['종목명']):<10} {row['composite']:.2f} "
+                f"{icon}{row['signal']:<7} {mom_s}"
+            )
+
+        table = "\n".join(lines)
+
+        # AI 추천
+        top_list = [
+            {"ticker": t, "name": row["종목명"], "score": row["composite"], "signal": row["signal"]}
+            for t, row in signals.head(top_n).iterrows()
+        ]
+        ai_text = get_ai_recommendation(top_list)
+
+        now  = datetime.now().strftime("%Y/%m/%d %H:%M")
+        full = (
+            f"📊 *{market} 퀀트 신호* `{now}`\n"
+            f"```\n순위  종목명         점수  신호      모멘텀\n"
+            f"{'─'*42}\n{table}\n```\n\n"
+            f"🤖 *AI 퀀트 전략*\n{ai_text}\n\n"
+            f"_📌 팩터: 1M/3M/6M 모멘텀 + MA크로스 + RSI 역추세_"
+        )
+        await safe_send(msg, full, edit=True, user_msg=update.message, context=context)
+
+    except Exception as e:
+        await msg.edit_text(f"❌ 퀀트 분석 오류: {e}")
+
+
 # ── 봇 실행 ───────────────────────────────────────────────────
 
 def main():
@@ -682,10 +839,13 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("help",   cmd_start))
-    app.add_handler(CommandHandler("market", cmd_market))
-    app.add_handler(CommandHandler("brief",  cmd_brief))
+    app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("help",      cmd_start))
+    app.add_handler(CommandHandler("market",    cmd_market))
+    app.add_handler(CommandHandler("brief",     cmd_brief))
+    app.add_handler(CommandHandler("quant",     cmd_quant))
+    app.add_handler(CommandHandler("portfolio", cmd_portfolio))
+    app.add_handler(CommandHandler("rebalance", cmd_rebalance))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 

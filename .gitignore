@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+quant_data.db
+portfolio.json
+quant_lgb_model.txt
+files.zip
