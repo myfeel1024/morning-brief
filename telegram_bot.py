@@ -256,6 +256,13 @@ def fetch_recent_news(query: str = None, n: int = 5) -> list[str]:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update):
+        cid  = update.effective_chat.id
+        name = getattr(update.effective_chat, "full_name", "") or ""
+        await update.message.reply_text(
+            f"👋 안녕하세요{', ' + name if name else ''}!\n\n"
+            f"🔑 내 Chat ID: {cid}\n\n"
+            "이 숫자를 봇 관리자에게 알려주시면 접근 권한을 받을 수 있습니다."
+        )
         return
     _clear(update.effective_chat.id)   # 새 대화 시작 시 히스토리 초기화
     await update.message.reply_text(
