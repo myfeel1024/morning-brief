@@ -46,7 +46,7 @@ def tg_send(chat_id, text: str) -> None:
     for chunk in [text[i:i+max_len] for i in range(0, len(text), max_len)]:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"},
+            data={"chat_id": chat_id, "text": chunk},
             timeout=15,
         )
         time.sleep(0.5)

@@ -40,9 +40,8 @@ def send_telegram(text: str, chat_id: str = "") -> None:
     for chunk in chunks:
         try:
             res = requests.post(url, data={
-                "chat_id":    target,
-                "text":       chunk,
-                "parse_mode": "Markdown",
+                "chat_id": target,
+                "text":    chunk,
             }, timeout=10)
             if res.status_code != 200:
                 print(f"전송 오류: {res.text}")
@@ -101,27 +100,25 @@ def run_quant_signal(top_n: int = 10, chat_id: str = "") -> None:
                      "score": row["composite"], "signal": row["signal"]}
                     for t, row in signals.head(top_n).iterrows()
                 ]
-                ai_text = "\n\n🤖 *AI 퀀트 전략*\n" + get_ai_recommendation(top_list)
+                ai_text = "\n\n🤖 AI 퀀트 전략\n" + get_ai_recommendation(top_list)
             except Exception as e:
                 ai_text = f"\n\nAI 분석 실패: {e}"
 
-        # 메시지 조합
+        # 메시지 조합 (parse_mode 없이 일반 텍스트)
         separator = "\n" + "─" * 30 + "\n"
         message = (
-            f"📊 *퀀트 신호 브리핑* `{now}`"
+            f"📊 퀀트 신호 브리핑 {now}"
             + separator
             + mf_txt
             + separator
-            + f"*KOSPI 팩터 신호 상위 {top_n}*\n"
-            + "```\n"
+            + f"KOSPI 팩터 신호 상위 {top_n}\n"
             + f"순위  종목명         점수  신호      3M수익\n"
             + "─" * 42 + "\n"
             + table
-            + "\n```"
             + ai_text
             + separator
-            + "_📌 팩터: 모멘텀(1M/3M/6M) + MA크로스 + RSI 역추세_\n"
-            + "_본 신호는 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다._"
+            + "📌 팩터: 모멘텀(1M/3M/6M) + MA크로스 + RSI 역추세\n"
+            + "본 신호는 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다."
         )
 
         print("  → 텔레그램 전송 중...")
