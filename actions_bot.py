@@ -56,18 +56,20 @@ def tg_send(chat_id, text: str) -> None:
 
 def get_recent_commands() -> list[dict]:
     """
-    최근 100개 업데이트에서 WINDOW_SEC 이내의 명령어만 반환.
-    허가된 CHAT_ID 에서 온 것만 처리.
+    최근 100개 업데이트에서 WINDOW_SEC 이내의 명령어 반환.
+    CHAT_ID가 설정된 경우 해당 채팅만, 미설정 시 전체 허용.
     """
     data = tg_get("getUpdates", limit=100, timeout=0)
     updates = data.get("result", [])
 
     print(f"  [DEBUG] getUpdates 응답: ok={data.get('ok')}, 업데이트 수={len(updates)}")
-    print(f"  [DEBUG] 설정된 CHAT_ID: '{CHAT_ID}'")
+    if CHAT_ID:
+        print(f"  [DEBUG] CHAT_ID 필터 활성: '{CHAT_ID}'")
+    else:
+        print("  [DEBUG] CHAT_ID 미설정 → 모든 채팅 허용")
 
-    now    = datetime.now(timezone.utc).timestamp()
-    cmds   = []
-    mismatched_cmd_ids = []  # CHAT_ID 불일치로 무시된 명령어의 실제 chat_id
+    now  = datetime.now(timezone.utc).timestamp()
+    cmds = []
 
     for upd in updates:
         msg  = upd.get("message") or upd.get("edited_message", {})
@@ -78,15 +80,11 @@ def get_recent_commands() -> list[dict]:
         ts      = msg.get("date", 0)
         age_sec = now - ts
 
-        # 전체 메시지 현황 출력 (최근 30분 이내)
         if age_sec < 1800:
             print(f"  [DEBUG] 메시지: chat_id={chat_id}, age={age_sec:.0f}s, text='{text[:30]}'")
 
-        # 허가된 채팅 + 시간 윈도우 필터
-        if chat_id != str(CHAT_ID):
-            if text.startswith("/") and age_sec < WINDOW_SEC:
-                print(f"  [DEBUG] CHAT_ID 불일치 → 수신={chat_id}, 기대={CHAT_ID}")
-                mismatched_cmd_ids.append(chat_id)
+        # CHAT_ID가 설정된 경우에만 필터링
+        if CHAT_ID and chat_id != str(CHAT_ID):
             continue
         if now - ts > WINDOW_SEC:
             continue
@@ -99,19 +97,6 @@ def get_recent_commands() -> list[dict]:
             "update_id": upd.get("update_id"),
             "ts":        ts,
         })
-
-    # CHAT_ID 불일치가 있으면 설정된 CHAT_ID로 경고 전송
-    if mismatched_cmd_ids:
-        unique_ids = list(dict.fromkeys(mismatched_cmd_ids))
-        warn = (
-            "⚠️ *CHAT_ID 불일치 감지*\n\n"
-            "명령어가 수신됐지만 설정된 CHAT_ID와 달라서 무시됐어요.\n\n"
-            f"📌 *실제 수신된 Chat ID:*\n"
-            + "\n".join(f"`{cid}`" for cid in unique_ids)
-            + "\n\n위 ID를 GitHub Secrets의 `TELEGRAM_CHAT_ID`에 설정해주세요."
-        )
-        print(f"  [WARN] CHAT_ID 불일치 알림 전송: {unique_ids}")
-        tg_send(CHAT_ID, warn)
 
     return cmds
 
@@ -186,8 +171,8 @@ HANDLERS = {
 
 
 def main():
-    if not TOKEN or not CHAT_ID:
-        print("TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 미설정")
+    if not TOKEN:
+        print("TELEGRAM_BOT_TOKEN 미설정")
         sys.exit(1)
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 명령어 확인 시작...")
