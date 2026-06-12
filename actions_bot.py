@@ -182,8 +182,13 @@ def main():
         sys.exit(1)
     print(f"[OK] 봇 연결 확인: @{me['result'].get('username')} (id={me['result'].get('id')})")
 
+    # Webhook 충돌 방지: getUpdates 전에 반드시 webhook 해제
+    wh = tg_get("deleteWebhook")
+    print(f"[OK] deleteWebhook: {wh}")
+
     # getUpdates 전체 현황 확인 (시간 무관, 최근 chat_id 파악용)
     raw = tg_get("getUpdates", limit=10, timeout=0)
+    print(f"[DEBUG] getUpdates raw ok={raw.get('ok')}, error={raw.get('description','')}")
     all_updates = raw.get("result", [])
     print(f"[DEBUG] 전체 업데이트 수: {len(all_updates)}")
 
