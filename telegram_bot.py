@@ -875,18 +875,15 @@ async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── 봇 실행 ───────────────────────────────────────────────────
 
-import asyncio
-from aiohttp import web as _web
-
-async def _async_main():
+def main():
     if not TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN이 설정되지 않았습니다.")
 
     port = int(os.getenv("PORT", 10000))
-    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/") or \
-                 "https://morning-brief-bot-cvfd.onrender.com"
+    render_url = (os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/") or
+                  "https://morning-brief-bot-cvfd.onrender.com")
+    webhook_path = f"/{TOKEN}"
 
-    # ── PTB Application 빌드 (async 컨텍스트 안) ──
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start",     cmd_start))
@@ -905,44 +902,18 @@ async def _async_main():
         name="morning_brief_daily",
     )
 
-    # ── aiohttp 웹서버 (webhook + 헬스체크) ──
-    async def on_webhook(request: _web.Request) -> _web.Response:
-        data = await request.json()
-        update = Update.de_json(data, app.bot)
-        await app.update_queue.put(update)
-        return _web.Response(text="OK")
+    now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now_kst} KST] 봇 시작! (webhook port={port})")
 
-    async def on_health(request: _web.Request) -> _web.Response:
-        return _web.Response(text="OK")
-
-    web_app = _web.Application()
-    web_app.router.add_post("/webhook", on_webhook)
-    web_app.router.add_get("/",         on_health)
-
-
-    runner = _web.AppRunner(web_app)
-    await runner.setup()
-    await _web.TCPSite(runner, "0.0.0.0", port).start()
-    print(f"[Health] :{port} 웹서버 시작")
-
-    # ── PTB 초기화 + Webhook 등록 ──
-    async with app:
-        await app.bot.set_webhook(
-            url=f"{render_url}/webhook",
-            drop_pending_updates=True,
-            allowed_updates=list(Update.ALL_TYPES),
-        )
-        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{now_kst} KST] 봇 시작! Webhook: {render_url}/webhook")
-        await app.start()
-        await asyncio.Event().wait()   # 영구 실행
-        await app.stop()
-
-    await runner.cleanup()
-
-
-def main():
-    asyncio.run(_async_main())
+    # PTB 네이티브 webhook — Conflict 원천 불가, polling 없음
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=webhook_path,
+        webhook_url=f"{render_url}{webhook_path}",
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":

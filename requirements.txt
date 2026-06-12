@@ -1,4 +1,3 @@
-aiohttp
 yfinance
 requests
 anthropic
