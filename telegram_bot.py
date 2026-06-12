@@ -481,7 +481,47 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 차트 기술적 분석
         stock_info = f"종목: {chart_stock}" if chart_stock else ""
         ind_info   = f"확인된 지표: {indicators}" if indicators else ""
-        bb_info    = f"볼린저밴드 현재 위치: {bb_position}" if bb_position and bb_position != "없음" else ""
+
+        # BB: yfinance 실제 계산 (종목 인식된 경우) → 시각 감지 대체
+        bb_info = ""
+        if chart_stock and "볼린저밴드" in (indicators or ""):
+            try:
+                from stock_research import get_kr_stock_code
+                import yfinance as yf
+                import numpy as np
+                code = get_kr_stock_code(chart_stock)
+                yf_ticker = None
+                for sfx in [".KS", ".KQ"]:
+                    t = yf.Ticker(f"{code}{sfx}" if code else f"{chart_stock}{sfx}")
+                    hist = t.history(period="2mo", interval="1d")
+                    if len(hist) >= 20:
+                        yf_ticker = hist
+                        break
+                if yf_ticker is not None and len(yf_ticker) >= 20:
+                    closes = yf_ticker["Close"]
+                    ma20   = closes.rolling(20).mean().iloc[-1]
+                    std20  = closes.rolling(20).std().iloc[-1]
+                    bb_up  = ma20 + 2 * std20
+                    bb_dn  = ma20 - 2 * std20
+                    cur    = closes.iloc[-1]
+                    pct_b  = (cur - bb_dn) / (bb_up - bb_dn) if (bb_up - bb_dn) > 0 else 0.5
+                    if pct_b >= 0.8:
+                        bb_pos_str = "상단 근처"
+                    elif pct_b <= 0.2:
+                        bb_pos_str = "하단 근처 (과매도)"
+                    else:
+                        bb_pos_str = "중간 구간"
+                    bb_info = (
+                        f"[실시간 볼린저밴드 데이터 (20일, 2σ)]\n"
+                        f"BB 상단: {bb_up:,.0f}원 / BB 중간(MA20): {ma20:,.0f}원 / BB 하단: {bb_dn:,.0f}원\n"
+                        f"현재가: {cur:,.0f}원 / %B: {pct_b:.2f} → {bb_pos_str}\n"
+                        f"(이 수치를 분석의 기준으로 사용하고, 차트 시각 판단보다 우선 적용)"
+                    )
+            except Exception:
+                if bb_position and bb_position != "없음":
+                    bb_info = f"볼린저밴드 현재 위치(차트 시각 감지): {bb_position}"
+        elif bb_position and bb_position != "없음":
+            bb_info = f"볼린저밴드 현재 위치(차트 시각 감지): {bb_position}"
 
         prompt = f"""당신은 기술적 분석 전문가입니다.
 이 차트를 세밀하게 분석하세요.
