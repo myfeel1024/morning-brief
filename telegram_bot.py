@@ -18,9 +18,8 @@ import os
 import base64
 import json
 import asyncio
-import threading
+
 from datetime import datetime, timezone, timedelta, time as dtime
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import tempfile
 
@@ -899,38 +898,54 @@ def main():
         name="morning_brief_daily",
     )
 
-    # Render Web Service 슬립 방지용 헬스체크 서버
     port = int(os.getenv("PORT", 10000))
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not render_url:
+        render_url = "https://morning-brief-bot-cvfd.onrender.com"
 
-    class _Health(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
-        def log_message(self, *args):
-            pass
-
-    threading.Thread(
-        target=lambda: HTTPServer(("0.0.0.0", port), _Health).serve_forever(),
-        daemon=True,
-    ).start()
-    print(f"[Health] :{port} 헬스체크 서버 시작")
-
-    import time
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_kst} KST] 증시 비서 봇 시작! (모닝 브리핑: 매일 07:50 KST)")
-    # Conflict 시 재시도 (구 인스턴스가 아직 살아있는 경우)
-    for attempt in range(5):
-        try:
-            app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-            break
-        except Exception as e:
-            if "Conflict" in str(e):
-                wait = 10 * (attempt + 1)
-                print(f"[Conflict] 구 인스턴스 충돌 감지, {wait}초 후 재시도 ({attempt+1}/5)")
-                time.sleep(wait)
-            else:
-                raise
+
+    import asyncio
+    from aiohttp import web
+
+    async def _run():
+        # Telegram webhook 수신 핸들러
+        async def on_webhook(request: web.Request) -> web.Response:
+            data = await request.json()
+            update = Update.de_json(data, app.bot)
+            await app.update_queue.put(update)
+            return web.Response(text="OK")
+
+        # 헬스체크 핸들러 (cron-job.org + Render 슬립 방지)
+        async def on_health(request: web.Request) -> web.Response:
+            return web.Response(text="OK")
+
+        web_app = web.Application()
+        web_app.router.add_post("/webhook", on_webhook)
+        web_app.router.add_get("/",         on_health)
+        web_app.router.add_head("/",        on_health)
+
+        runner = web.AppRunner(web_app)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", port).start()
+        print(f"[Health] :{port} 웹서버 시작 (Webhook + 헬스체크)")
+
+        async with app:
+            # Webhook 등록 (이전 polling/webhook 모두 정리)
+            await app.bot.set_webhook(
+                url=f"{render_url}/webhook",
+                drop_pending_updates=True,
+                allowed_updates=list(Update.ALL_TYPES),
+            )
+            print(f"[Webhook] 등록 완료: {render_url}/webhook")
+            await app.start()
+            await asyncio.Event().wait()   # 영구 실행
+            await app.stop()
+
+        await runner.cleanup()
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
