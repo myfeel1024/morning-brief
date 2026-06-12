@@ -675,6 +675,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── 종목 감지 → 실시간 데이터 + 증권사 리포트 ──
     detected      = _detect_stocks_in_text(question)
     research_text = ""
+    price_summary = ""   # 현재가 요약 (시스템 프롬프트 상단에 명시)
     if detected:
         await msg.edit_text(f"🔍 {', '.join(detected)} 데이터 수집 중...")
         parts = []
@@ -682,6 +683,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data = research_stock(stock)
             if data and "데이터 없음" not in data:
                 parts.append(data)
+                # 현재가 추출 → 상단 명시용
+                for line in data.splitlines():
+                    if "현재가:" in line:
+                        price_summary += f"{stock} {line.strip()}\n"
+                        break
         research_text = "\n\n".join(parts)
 
     # ── 매수/매도 판단 여부 ──
@@ -703,7 +709,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── 시스템 프롬프트 (매번 최신 매크로 반영) ──
     system_prompt = f"""당신은 한국 주식/투자 전문 비서입니다.
 이전 대화 맥락을 기억하고 이어서 답변하세요.
-
+{(chr(10) + "[현재가 (이 수치를 기준으로 모든 원 단위 계산)]" + chr(10) + price_summary) if price_summary else ""}
 [현재 매크로 환경]
 {macro_text}
 
@@ -715,9 +721,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {verdict_guide}
 - 수치와 근거를 구체적으로 제시
 - 매수/매도 타점·지지선·목표가 언급 시 반드시 실제 주가(원) 계산해서 표기
-  예) "-3% 구간 → 약 55,300원", "20일선 지지 → 약 54,000원대"
-  위 실시간 데이터의 현재가를 기준으로 직접 계산할 것
-- 현재가는 위 실시간 데이터에 이미 포함되어 있음. 절대 사용자에게 현재가를 물어보지 말 것
+  예) 현재가 200,000원 기준 "-3% 구간 → 약 194,000원", "20일선 지지 → 약 190,000원대"
+  반드시 위 현재가를 기준으로 직접 계산하여 원 단위로 표기할 것. 퍼센트(%)만 쓰면 안 됨
+- 절대 사용자에게 현재가를 물어보지 말 것. 현재가는 위에 제공됨
 - 이전 대화에서 언급된 종목/주제가 있으면 자연스럽게 연결
 - 투자 결정은 본인 책임임을 마지막 한 줄에 언급
 - 텔레그램 일반 텍스트 메시지 규칙: 마크다운 헤더(#, ##, ###), 볼드(**), 기울임(*), 수평선(---), 표(|) 절대 사용 금지. 이모지 + 일반 텍스트로만 구성

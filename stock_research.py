@@ -229,10 +229,17 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
         try:
             t  = yf.Ticker(f"{stock_code}{suffix}")
             fi = t.fast_info
-            if not fi.last_price:
+            # 장 중: last_price / 장 마감 후: previous_close 사용
+            price = fi.last_price or fi.previous_close
+            if not price or price <= 0:
+                # 최후 수단: 1일 history
+                hist = t.history(period="2d", interval="1d")
+                if hist.empty:
+                    continue
+                price = float(hist["Close"].iloc[-1])
+            if not price or price <= 0:
                 continue
 
-            price  = fi.last_price
             prev   = fi.previous_close
             result = {"현재가": f"{price:,.0f}원"}
 
