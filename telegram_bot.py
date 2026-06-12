@@ -148,7 +148,20 @@ NEWS_API_KEY     = os.getenv("NEWS_API_KEY", "")
 def is_authorized(update: Update) -> bool:
     cid = str(update.effective_chat.id)
     if cid not in AUTHORIZED_CHATS:
-        print(f"[UNAUTHORIZED] chat_id={cid} name={update.effective_chat.full_name}")
+        name = getattr(update.effective_chat, "full_name", "?") or "?"
+        print(f"[UNAUTHORIZED] chat_id={cid} name={name}")
+        # 주인(첫 번째 등록 ID)에게 텔레그램 알림 발송
+        try:
+            owner_id = next(iter(AUTHORIZED_CHATS), "")
+            if owner_id and TELEGRAM_BOT_TOKEN:
+                requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": owner_id,
+                          "text": f"[새 접속 시도]\nchat_id: {cid}\n이름: {name}\n\n이 ID를 허용하려면 Render 환경변수 TELEGRAM_CHAT_ID에 추가하세요."},
+                    timeout=5,
+                )
+        except Exception:
+            pass
         return False
     return True
 
