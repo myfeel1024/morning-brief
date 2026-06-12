@@ -913,9 +913,12 @@ def main():
     ).start()
     print(f"[Health] :{port} 헬스체크 서버 시작")
 
+    import time
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_kst} KST] 증시 비서 봇 시작! (모닝 브리핑: 매일 07:50 KST)")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # 재배포 시 구 인스턴스 종료 대기 (Conflict 방지)
+    time.sleep(5)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
