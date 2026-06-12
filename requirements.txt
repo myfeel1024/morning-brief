@@ -8,7 +8,4 @@ lxml
 pykrx
 numpy
 pandas
-lightgbm
-streamlit
-plotly
-FinanceDataReader
+finance-datareader
