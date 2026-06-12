@@ -918,7 +918,7 @@ async def _async_main():
     web_app = _web.Application()
     web_app.router.add_post("/webhook", on_webhook)
     web_app.router.add_get("/",         on_health)
-    web_app.router.add_head("/",        on_health)
+
 
     runner = _web.AppRunner(web_app)
     await runner.setup()
