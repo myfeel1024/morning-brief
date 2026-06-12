@@ -875,10 +875,18 @@ async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── 봇 실행 ───────────────────────────────────────────────────
 
-def main():
+import asyncio
+from aiohttp import web as _web
+
+async def _async_main():
     if not TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN이 설정되지 않았습니다.")
 
+    port = int(os.getenv("PORT", 10000))
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/") or \
+                 "https://morning-brief-bot-cvfd.onrender.com"
+
+    # ── PTB Application 빌드 (async 컨텍스트 안) ──
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start",     cmd_start))
@@ -891,61 +899,50 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # ── 매일 07:50 KST 자동 모닝 브리핑 ──
     app.job_queue.run_daily(
         job_morning_brief,
         time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
         name="morning_brief_daily",
     )
 
-    port = int(os.getenv("PORT", 10000))
-    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
-    if not render_url:
-        render_url = "https://morning-brief-bot-cvfd.onrender.com"
+    # ── aiohttp 웹서버 (webhook + 헬스체크) ──
+    async def on_webhook(request: _web.Request) -> _web.Response:
+        data = await request.json()
+        update = Update.de_json(data, app.bot)
+        await app.update_queue.put(update)
+        return _web.Response(text="OK")
 
-    now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now_kst} KST] 증시 비서 봇 시작! (모닝 브리핑: 매일 07:50 KST)")
+    async def on_health(request: _web.Request) -> _web.Response:
+        return _web.Response(text="OK")
 
-    import asyncio
-    from aiohttp import web
+    web_app = _web.Application()
+    web_app.router.add_post("/webhook", on_webhook)
+    web_app.router.add_get("/",         on_health)
+    web_app.router.add_head("/",        on_health)
 
-    async def _run():
-        # Telegram webhook 수신 핸들러
-        async def on_webhook(request: web.Request) -> web.Response:
-            data = await request.json()
-            update = Update.de_json(data, app.bot)
-            await app.update_queue.put(update)
-            return web.Response(text="OK")
+    runner = _web.AppRunner(web_app)
+    await runner.setup()
+    await _web.TCPSite(runner, "0.0.0.0", port).start()
+    print(f"[Health] :{port} 웹서버 시작")
 
-        # 헬스체크 핸들러 (cron-job.org + Render 슬립 방지)
-        async def on_health(request: web.Request) -> web.Response:
-            return web.Response(text="OK")
+    # ── PTB 초기화 + Webhook 등록 ──
+    async with app:
+        await app.bot.set_webhook(
+            url=f"{render_url}/webhook",
+            drop_pending_updates=True,
+            allowed_updates=list(Update.ALL_TYPES),
+        )
+        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{now_kst} KST] 봇 시작! Webhook: {render_url}/webhook")
+        await app.start()
+        await asyncio.Event().wait()   # 영구 실행
+        await app.stop()
 
-        web_app = web.Application()
-        web_app.router.add_post("/webhook", on_webhook)
-        web_app.router.add_get("/",         on_health)
-        web_app.router.add_head("/",        on_health)
+    await runner.cleanup()
 
-        runner = web.AppRunner(web_app)
-        await runner.setup()
-        await web.TCPSite(runner, "0.0.0.0", port).start()
-        print(f"[Health] :{port} 웹서버 시작 (Webhook + 헬스체크)")
 
-        async with app:
-            # Webhook 등록 (이전 polling/webhook 모두 정리)
-            await app.bot.set_webhook(
-                url=f"{render_url}/webhook",
-                drop_pending_updates=True,
-                allowed_updates=list(Update.ALL_TYPES),
-            )
-            print(f"[Webhook] 등록 완료: {render_url}/webhook")
-            await app.start()
-            await asyncio.Event().wait()   # 영구 실행
-            await app.stop()
-
-        await runner.cleanup()
-
-    asyncio.run(_run())
+def main():
+    asyncio.run(_async_main())
 
 
 if __name__ == "__main__":
