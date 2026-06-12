@@ -146,7 +146,11 @@ NEWS_API_KEY     = os.getenv("NEWS_API_KEY", "")
 # ── 보안: 허가된 사용자만 응답 ────────────────────────────────
 
 def is_authorized(update: Update) -> bool:
-    return str(update.effective_chat.id) in AUTHORIZED_CHATS
+    cid = str(update.effective_chat.id)
+    if cid not in AUTHORIZED_CHATS:
+        print(f"[UNAUTHORIZED] chat_id={cid} name={update.effective_chat.full_name}")
+        return False
+    return True
 
 
 # ── 매크로 데이터 수집 ────────────────────────────────────────
