@@ -145,23 +145,26 @@ NEWS_API_KEY     = os.getenv("NEWS_API_KEY", "")
 
 # ── 보안: 허가된 사용자만 응답 ────────────────────────────────
 
+_notified: set = set()   # 이미 알림 보낸 chat_id (프로세스 내 중복 방지)
+
 def is_authorized(update: Update) -> bool:
     cid = str(update.effective_chat.id)
     if cid not in AUTHORIZED_CHATS:
-        name = getattr(update.effective_chat, "full_name", "?") or "?"
-        print(f"[UNAUTHORIZED] chat_id={cid} name={name}")
-        # 주인(첫 번째 등록 ID)에게 텔레그램 알림 발송
-        try:
-            owner_id = next(iter(AUTHORIZED_CHATS), "")
-            if owner_id and TOKEN:
-                requests.post(
-                    f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                    json={"chat_id": owner_id,
-                          "text": f"[새 접속 시도]\nchat_id: {cid}\n이름: {name}\n\n이 ID를 허용하려면 Render 환경변수 TELEGRAM_CHAT_ID에 추가하세요."},
-                    timeout=5,
-                )
-        except Exception:
-            pass
+        if cid not in _notified:
+            _notified.add(cid)
+            name = getattr(update.effective_chat, "full_name", "?") or "?"
+            print(f"[UNAUTHORIZED] chat_id={cid} name={name}")
+            try:
+                owner_id = next(iter(AUTHORIZED_CHATS), "")
+                if owner_id and TOKEN:
+                    requests.post(
+                        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                        json={"chat_id": owner_id,
+                              "text": f"[새 접속 시도]\nchat_id: {cid}\n이름: {name}\n\n이 ID를 허용하려면 Render 환경변수 TELEGRAM_CHAT_ID에 추가하세요."},
+                        timeout=5,
+                    )
+            except Exception:
+                pass
         return False
     return True
 
@@ -916,9 +919,18 @@ def main():
     import time
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_kst} KST] 증시 비서 봇 시작! (모닝 브리핑: 매일 07:50 KST)")
-    # 재배포 시 구 인스턴스 종료 대기 (Conflict 방지)
-    time.sleep(5)
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Conflict 시 재시도 (구 인스턴스가 아직 살아있는 경우)
+    for attempt in range(5):
+        try:
+            app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+            break
+        except Exception as e:
+            if "Conflict" in str(e):
+                wait = 10 * (attempt + 1)
+                print(f"[Conflict] 구 인스턴스 충돌 감지, {wait}초 후 재시도 ({attempt+1}/5)")
+                time.sleep(wait)
+            else:
+                raise
 
 
 if __name__ == "__main__":
