@@ -18,7 +18,9 @@ import os
 import base64
 import json
 import asyncio
+import threading
 from datetime import datetime, timezone, timedelta, time as dtime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import tempfile
 
@@ -816,6 +818,23 @@ def main():
         time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
         name="morning_brief_daily",
     )
+
+    # Render Web Service 슬립 방지용 헬스체크 서버
+    port = int(os.getenv("PORT", 10000))
+
+    class _Health(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, *args):
+            pass
+
+    threading.Thread(
+        target=lambda: HTTPServer(("0.0.0.0", port), _Health).serve_forever(),
+        daemon=True,
+    ).start()
+    print(f"[Health] :{port} 헬스체크 서버 시작")
 
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_kst} KST] 증시 비서 봇 시작! (모닝 브리핑: 매일 07:50 KST)")
