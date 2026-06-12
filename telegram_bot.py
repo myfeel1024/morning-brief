@@ -457,7 +457,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - 한국어로 작성."""
 
         analysis = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=3000,
+            model="claude-sonnet-4-6", max_tokens=4000,
             messages=[{
                 "role": "user",
                 "content": [
@@ -578,7 +578,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 한국어로 작성."""
 
         analysis = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=2000,
+            model="claude-sonnet-4-6", max_tokens=4000,
             messages=[{
                 "role": "user",
                 "content": [
@@ -591,7 +591,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         now   = datetime.now().strftime("%Y/%m/%d %H:%M")
-        title = f"📈 *차트 기술적 분석* `{now}`"
+        title = f"📈 차트 기술적 분석 ({now})"
         if chart_stock:
             title += f"\n종목: {chart_stock}"
         reply = f"{title}\n{'─'*30}\n{analysis.content[0].text}"
