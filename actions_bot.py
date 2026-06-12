@@ -28,7 +28,7 @@ _load_env()
 TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-WINDOW_SEC = 30 * 60  # 30분 이내 메시지만 처리 (GitHub Actions 지연 대비)
+WINDOW_SEC = 20 * 60  # 20분 이내 메시지만 처리 (5분 주기 + 지연 여유)
 
 
 # ── Telegram API 헬퍼 ─────────────────────────────────────────
@@ -183,29 +183,7 @@ def main():
     print(f"[OK] 봇 연결 확인: @{me['result'].get('username')} (id={me['result'].get('id')})")
 
     # Webhook 충돌 방지: getUpdates 전에 반드시 webhook 해제
-    wh = tg_get("deleteWebhook")
-    print(f"[OK] deleteWebhook: {wh}")
-
-    # getUpdates 전체 현황 확인 (시간 무관, 최근 chat_id 파악용)
-    raw = tg_get("getUpdates", limit=10, timeout=0)
-    print(f"[DEBUG] getUpdates raw ok={raw.get('ok')}, error={raw.get('description','')}")
-    all_updates = raw.get("result", [])
-    print(f"[DEBUG] 전체 업데이트 수: {len(all_updates)}")
-
-    # 가장 최근 chat_id 추출 (진단 메시지 발송 대상)
-    diag_chat_id = None
-    for upd in reversed(all_updates):
-        msg = upd.get("message") or upd.get("edited_message", {})
-        if msg:
-            diag_chat_id = str(msg.get("chat", {}).get("id", ""))
-            break
-
-    if diag_chat_id:
-        now_str = datetime.now().strftime("%H:%M:%S")
-        tg_send(diag_chat_id, f"🔧 봇 진단: 연결 OK, 업데이트 {len(all_updates)}개 발견 ({now_str})")
-        print(f"[OK] 진단 메시지 발송 → chat_id={diag_chat_id}")
-    else:
-        print("[WARN] 업데이트 없음 — 텔레그램에서 아무 메시지나 보내주세요")
+    tg_get("deleteWebhook")
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 명령어 확인 시작...")
     cmds = get_recent_commands()

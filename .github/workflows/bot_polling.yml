@@ -2,7 +2,7 @@ name: 텔레그램 봇 (상시 대기)
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # 10분마다 실행 (Public 저장소 무제한 무료)
+    - cron: '*/5 * * * *'    # 5분마다 실행 (Public 저장소 무제한 무료)
   workflow_dispatch:           # 수동 테스트용
 
 jobs:
