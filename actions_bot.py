@@ -182,6 +182,26 @@ def main():
         sys.exit(1)
     print(f"[OK] 봇 연결 확인: @{me['result'].get('username')} (id={me['result'].get('id')})")
 
+    # getUpdates 전체 현황 확인 (시간 무관, 최근 chat_id 파악용)
+    raw = tg_get("getUpdates", limit=10, timeout=0)
+    all_updates = raw.get("result", [])
+    print(f"[DEBUG] 전체 업데이트 수: {len(all_updates)}")
+
+    # 가장 최근 chat_id 추출 (진단 메시지 발송 대상)
+    diag_chat_id = None
+    for upd in reversed(all_updates):
+        msg = upd.get("message") or upd.get("edited_message", {})
+        if msg:
+            diag_chat_id = str(msg.get("chat", {}).get("id", ""))
+            break
+
+    if diag_chat_id:
+        now_str = datetime.now().strftime("%H:%M:%S")
+        tg_send(diag_chat_id, f"🔧 봇 진단: 연결 OK, 업데이트 {len(all_updates)}개 발견 ({now_str})")
+        print(f"[OK] 진단 메시지 발송 → chat_id={diag_chat_id}")
+    else:
+        print("[WARN] 업데이트 없음 — 텔레그램에서 아무 메시지나 보내주세요")
+
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 명령어 확인 시작...")
     cmds = get_recent_commands()
 
