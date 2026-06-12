@@ -665,6 +665,22 @@ _US_TICKERS = {
     "SPY","QQQ","SOXL","TQQQ",
 }
 
+# 한국어 종목명 → 미국 티커 매핑 (실시간 가격 오류 방지)
+_KR_TO_US: dict[str, str] = {
+    "알파벳": "GOOGL", "구글": "GOOGL",
+    "애플": "AAPL",
+    "마이크로소프트": "MSFT", "MS": "MSFT",
+    "엔비디아": "NVDA",
+    "아마존": "AMZN",
+    "메타": "META",
+    "테슬라": "TSLA",
+    "AMD": "AMD",
+    "인텔": "INTC",
+    "넷플릭스": "NFLX",
+    "팔란티어": "PLTR",
+    "브로드컴": "AVGO",
+}
+
 def _detect_stocks_in_text(text: str) -> list[str]:
     """질문 텍스트에서 종목명 추출 (한국 + 미국)"""
     import re as _re
@@ -675,7 +691,11 @@ def _detect_stocks_in_text(text: str) -> list[str]:
     for name in KR_STOCK_MAP:
         if name in text and name not in found:
             found.append(name)
-    # 미국 주식: 대문자 2~5글자 티커
+    # 미국 주식: 한국어 이름 → 티커 변환 (실시간 가격 보장)
+    for kr_name, ticker in _KR_TO_US.items():
+        if kr_name in text and ticker not in found:
+            found.append(ticker)
+    # 미국 주식: 대문자 티커 직접 입력
     for ticker in _re.findall(r'\b[A-Z]{2,5}\b', text):
         if ticker in _US_TICKERS and ticker not in found:
             found.append(ticker)
