@@ -153,9 +153,9 @@ def is_authorized(update: Update) -> bool:
         # 주인(첫 번째 등록 ID)에게 텔레그램 알림 발송
         try:
             owner_id = next(iter(AUTHORIZED_CHATS), "")
-            if owner_id and TELEGRAM_BOT_TOKEN:
+            if owner_id and TOKEN:
                 requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    f"https://api.telegram.org/bot{TOKEN}/sendMessage",
                     json={"chat_id": owner_id,
                           "text": f"[새 접속 시도]\nchat_id: {cid}\n이름: {name}\n\n이 ID를 허용하려면 Render 환경변수 TELEGRAM_CHAT_ID에 추가하세요."},
                     timeout=5,
