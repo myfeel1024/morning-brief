@@ -2,7 +2,7 @@ yfinance
 requests
 anthropic
 pillow
-python-telegram-bot[job-queue]
+python-telegram-bot[job-queue,webhooks]
 beautifulsoup4
 lxml
 pykrx
