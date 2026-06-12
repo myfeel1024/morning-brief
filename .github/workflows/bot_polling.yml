@@ -1,14 +1,20 @@
-name: 텔레그램 봇 (상시 대기)
+name: 퀀트 신호 분석
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'    # 5분마다 실행 (Public 저장소 무제한 무료)
-  workflow_dispatch:           # 수동 테스트용
+  workflow_dispatch:
+    inputs:
+      chat_id:
+        description: 'Telegram chat ID (Render 봇이 전달)'
+        required: true
+      top_n:
+        description: '분석 종목 수'
+        required: false
+        default: '10'
 
 jobs:
-  check-commands:
+  run-quant:
     runs-on: ubuntu-latest
-    timeout-minutes: 8         # 10분 주기보다 짧게 설정
+    timeout-minutes: 10
 
     steps:
       - name: 코드 체크아웃
@@ -23,10 +29,10 @@ jobs:
       - name: 패키지 설치
         run: pip install yfinance requests anthropic pykrx numpy pandas
 
-      - name: 명령어 확인 및 처리
+      - name: 퀀트 분석 실행
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
-          NEWS_API_KEY:       ${{ secrets.NEWS_API_KEY }}
+          QUANT_CHAT_ID:      ${{ github.event.inputs.chat_id }}
+          QUANT_TOP_N:        ${{ github.event.inputs.top_n }}
         run: python actions_bot.py

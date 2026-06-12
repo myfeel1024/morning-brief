@@ -762,73 +762,34 @@ async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update):
         return
 
-    args_list = context.args  # /quant [market] [top_n]
-    market  = "KOSPI"
-    top_n   = 10
-
+    args_list = context.args
+    top_n = 10
     for arg in (args_list or []):
-        if arg.upper() in ("KOSPI", "KOSDAQ"):
-            market = arg.upper()
-        elif arg.isdigit():
+        if arg.isdigit():
             top_n = int(arg)
 
-    msg = await update.message.reply_text(
-        f"⏳ {market} 퀀트 신호 분석 중... (2~3분 소요)\n"
-        f"상위 {top_n}개 종목 팩터 스코어링 + AI 추천"
+    chat_id = str(update.effective_chat.id)
+
+    await update.message.reply_text(
+        f"⏳ 퀀트 신호 분석 중... (1~2분 소요)\n상위 {top_n}개 종목 팩터 스코어링 + AI 추천"
     )
 
-    try:
-        from quant_engine import (
-            get_prices_batch, compute_scores, generate_signals,
-            days_ago_str, today_str, KOSPI_SAMPLE,
-        )
-        from quant_ai import get_ai_recommendation
+    github_pat = os.getenv("GITHUB_PAT", "")
+    if not github_pat:
+        await update.message.reply_text("❌ GITHUB_PAT 미설정 — 관리자에게 문의하세요.")
+        return
 
-        tickers = KOSPI_SAMPLE  # 속도를 위해 대표 50종목 사용
-        prices  = get_prices_batch(tickers, days_ago_str(200), today_str())
-        if prices.empty:
-            await msg.edit_text("❌ 데이터 수집 실패. 잠시 후 다시 시도하세요.")
-            return
-
-        scores  = compute_scores(prices)
-        signals = generate_signals(scores, top_n=top_n)
-
-        if signals.empty:
-            await msg.edit_text("❌ 팩터 계산 실패.")
-            return
-
-        # 신호 테이블
-        lines = []
-        for ticker, row in signals.head(top_n).iterrows():
-            icon  = {"BUY": "🟢", "SELL": "🔴", "NEUTRAL": "⚪"}.get(row["signal"], "⚪")
-            mom3m = scores.loc[ticker, "mom3m"] if "mom3m" in scores.columns and ticker in scores.index else None
-            mom_s = f"{mom3m*100:+.0f}%" if mom3m is not None and mom3m == mom3m else "N/A"
-            lines.append(
-                f"{int(row['rank']):2}. {str(row['종목명']):<10} {row['composite']:.2f} "
-                f"{icon}{row['signal']:<7} {mom_s}"
-            )
-
-        table = "\n".join(lines)
-
-        # AI 추천
-        top_list = [
-            {"ticker": t, "name": row["종목명"], "score": row["composite"], "signal": row["signal"]}
-            for t, row in signals.head(top_n).iterrows()
-        ]
-        ai_text = get_ai_recommendation(top_list)
-
-        now  = datetime.now().strftime("%Y/%m/%d %H:%M")
-        full = (
-            f"📊 *{market} 퀀트 신호* `{now}`\n"
-            f"```\n순위  종목명         점수  신호      모멘텀\n"
-            f"{'─'*42}\n{table}\n```\n\n"
-            f"🤖 *AI 퀀트 전략*\n{ai_text}\n\n"
-            f"_📌 팩터: 1M/3M/6M 모멘텀 + MA크로스 + RSI 역추세_"
-        )
-        await safe_send(msg, full, edit=True, user_msg=update.message, context=context)
-
-    except Exception as e:
-        await msg.edit_text(f"❌ 퀀트 분석 오류: {e}")
+    resp = requests.post(
+        "https://api.github.com/repos/myfeel1024/morning-brief/actions/workflows/bot_polling.yml/dispatches",
+        headers={
+            "Authorization": f"token {github_pat}",
+            "Accept": "application/vnd.github.v3+json",
+        },
+        json={"ref": "main", "inputs": {"chat_id": chat_id, "top_n": str(top_n)}},
+        timeout=10,
+    )
+    if resp.status_code != 204:
+        await update.message.reply_text(f"❌ 퀀트 분석 트리거 실패 (status={resp.status_code})")
 
 
 # ── 봇 실행 ───────────────────────────────────────────────────
