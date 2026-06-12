@@ -220,78 +220,114 @@ def fetch_korean_news(n: int = 8) -> list[str]:
 
 # ── 한국 주식 실시간 데이터 (yfinance .KS/.KQ) ───────────────
 
+def _get_kr_price_pykrx(stock_code: str) -> float:
+    """pykrx로 한국 주식 현재가(당일 or 전일 종가) 조회."""
+    try:
+        from pykrx import stock as krx
+        from datetime import datetime, timedelta
+        for delta in [0, 1, 2, 3]:
+            d = (datetime.now() - timedelta(days=delta)).strftime("%Y%m%d")
+            df = krx.get_market_ohlcv_by_date(d, d, stock_code)
+            if not df.empty:
+                return float(df["종가"].iloc[-1])
+    except Exception:
+        pass
+    return 0.0
+
+
 def get_kr_stock_realtime(stock_code: str) -> dict:
     """
-    yfinance로 한국 주식 실시간 데이터 조회.
-    KOSPI(.KS) → KOSDAQ(.KQ) 순으로 시도.
+    한국 주식 실시간 데이터 조회.
+    가격: pykrx(KRX 직접) 우선, yfinance 보조.
+    재무지표: yfinance.
     """
+    # ── Step 1: 현재가 (pykrx 우선) ──
+    price = _get_kr_price_pykrx(stock_code)
+
+    # ── Step 2: yfinance (재무지표 + 가격 보조) ──
+    yf_fi   = None
+    yf_info = {}
     for suffix in [".KS", ".KQ"]:
         try:
             t  = yf.Ticker(f"{stock_code}{suffix}")
             fi = t.fast_info
-            # 장 중: last_price / 장 마감 후: previous_close 사용
-            price = fi.last_price or fi.previous_close
-            if not price or price <= 0:
-                # 최후 수단: 1일 history
+            yf_price = fi.last_price or fi.previous_close
+            if not yf_price or yf_price <= 0:
                 hist = t.history(period="2d", interval="1d")
-                if hist.empty:
-                    continue
-                price = float(hist["Close"].iloc[-1])
-            if not price or price <= 0:
-                continue
+                if not hist.empty:
+                    yf_price = float(hist["Close"].iloc[-1])
+            if yf_price and yf_price > 0:
+                if price <= 0:
+                    price = yf_price   # pykrx 실패 시 yfinance 사용
+                yf_fi   = fi
+                yf_info = t.info
+                break
+        except Exception:
+            continue
 
-            prev   = fi.previous_close
-            result = {"현재가": f"{price:,.0f}원"}
+    if not price or price <= 0:
+        return {}
 
-            # 등락
-            if prev and prev > 0:
-                diff = price - prev
-                pct  = diff / prev * 100
-                arrow = "▲" if diff >= 0 else "▼"
-                result["등락"] = f"{arrow} {abs(diff):,.0f}원 ({pct:+.2f}%)"
+    prev   = (yf_fi.previous_close if yf_fi else None)
+    result = {"현재가": f"{price:,.0f}원"}
 
-            # 52주 고저 + 현재 위치
-            high52 = fi.fifty_two_week_high
-            low52  = fi.fifty_two_week_low
+    # 등락
+    if prev and prev > 0:
+        diff  = price - prev
+        pct   = diff / prev * 100
+        arrow = "▲" if diff >= 0 else "▼"
+        result["등락"] = f"{arrow} {abs(diff):,.0f}원 ({pct:+.2f}%)"
+
+    # 52주 고저 + 현재 위치 (yfinance)
+    if yf_fi:
+        try:
+            high52 = yf_fi.fifty_two_week_high
+            low52  = yf_fi.fifty_two_week_low
             if high52 and low52 and high52 > low52:
                 result["52주 고가"] = f"{high52:,.0f}원"
                 result["52주 저가"] = f"{low52:,.0f}원"
                 pos = (price - low52) / (high52 - low52) * 100
                 result["52주 내 위치"] = f"{pos:.0f}%  (0%=저점, 100%=고점)"
+        except Exception:
+            pass
 
-            # 재무 지표
-            info = t.info
-            if info.get("marketCap") and info["marketCap"] > 0:
-                mc = info["marketCap"]
+    # 재무 지표 (yfinance)
+    if yf_info:
+        try:
+            mc = yf_info.get("marketCap")
+            if mc and mc > 0:
                 result["시가총액"] = (
                     f"{mc/1e12:.2f}조원" if mc >= 1e12 else f"{mc/1e8:.0f}억원"
                 )
-            if info.get("trailingPE") and info["trailingPE"] > 0:
-                result["PER(TTM)"] = f"{info['trailingPE']:.1f}배"
-            if info.get("priceToBook") and info["priceToBook"] > 0:
-                result["PBR"] = f"{info['priceToBook']:.2f}배"
-            if info.get("trailingEps") and info["trailingEps"] != 0:
-                result["EPS"] = f"{info['trailingEps']:,.0f}원"
-            if info.get("dividendYield") and info["dividendYield"] > 0:
-                result["배당수익률"] = f"{info['dividendYield']*100:.2f}%"
-            if fi.volume and fi.volume > 0:
-                result["거래량"] = f"{fi.volume:,}주"
-
-            # yfinance 애널리스트 목표주가 (있으면 우선 사용)
-            target_mean = info.get("targetMeanPrice")
-            target_high = info.get("targetHighPrice")
-            target_low  = info.get("targetLowPrice")
+            pe = yf_info.get("trailingPE")
+            if pe and pe > 0:
+                result["PER(TTM)"] = f"{pe:.1f}배"
+            pb = yf_info.get("priceToBook")
+            if pb and pb > 0:
+                result["PBR"] = f"{pb:.2f}배"
+            eps = yf_info.get("trailingEps")
+            if eps and eps != 0:
+                result["EPS"] = f"{eps:,.0f}원"
+            dy = yf_info.get("dividendYield")
+            if dy and dy > 0:
+                result["배당수익률"] = f"{dy*100:.2f}%"
+            vol = yf_fi.volume if yf_fi else None
+            if vol and vol > 0:
+                result["거래량"] = f"{vol:,}주"
+            # 애널리스트 목표주가
+            target_mean = yf_info.get("targetMeanPrice")
+            target_high = yf_info.get("targetHighPrice")
+            target_low  = yf_info.get("targetLowPrice")
             if target_mean and target_mean > 0:
                 result["애널리스트 평균목표주가"] = f"{target_mean:,.0f}원"
                 upside = (target_mean - price) / price * 100
                 result["목표주가 upside"] = f"{upside:+.1f}%"
             if target_low and target_high and target_low > 0:
                 result["목표주가 범위"] = f"{target_low:,.0f}원 ~ {target_high:,.0f}원"
-
-            return result
         except Exception:
-            continue
-    return {}
+            pass
+
+    return result
 
 
 # ── 미국 주식 애널리스트 데이터 (yfinance) ────────────────────
