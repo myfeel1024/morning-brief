@@ -136,7 +136,9 @@ def _load_env_file():
 _load_env_file()
 
 TOKEN            = os.getenv("TELEGRAM_BOT_TOKEN", "")
-AUTHORIZED_CHAT  = os.getenv("TELEGRAM_CHAT_ID", "")   # 허가된 채팅 ID (보안)
+AUTHORIZED_CHATS = {
+    s.strip() for s in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if s.strip()
+}
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 NEWS_API_KEY     = os.getenv("NEWS_API_KEY", "")
 
@@ -144,7 +146,7 @@ NEWS_API_KEY     = os.getenv("NEWS_API_KEY", "")
 # ── 보안: 허가된 사용자만 응답 ────────────────────────────────
 
 def is_authorized(update: Update) -> bool:
-    return str(update.effective_chat.id) == str(AUTHORIZED_CHAT)
+    return str(update.effective_chat.id) in AUTHORIZED_CHATS
 
 
 # ── 매크로 데이터 수집 ────────────────────────────────────────
