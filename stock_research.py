@@ -270,6 +270,17 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
             if fi.volume and fi.volume > 0:
                 result["거래량"] = f"{fi.volume:,}주"
 
+            # yfinance 애널리스트 목표주가 (있으면 우선 사용)
+            target_mean = info.get("targetMeanPrice")
+            target_high = info.get("targetHighPrice")
+            target_low  = info.get("targetLowPrice")
+            if target_mean and target_mean > 0:
+                result["애널리스트 평균목표주가"] = f"{target_mean:,.0f}원"
+                upside = (target_mean - price) / price * 100
+                result["목표주가 upside"] = f"{upside:+.1f}%"
+            if target_low and target_high and target_low > 0:
+                result["목표주가 범위"] = f"{target_low:,.0f}원 ~ {target_high:,.0f}원"
+
             return result
         except Exception:
             continue
@@ -357,15 +368,16 @@ def research_stock(stock_name: str) -> str:
                 for r in reports:
                     line = f"  [{r['firm'] or '?'}] {r['title']}"
                     if r["target_price"]:
-                        line += f" | 목표주가 {r['target_price']}"
-                        # upside % 계산
-                        if current_price > 0:
-                            try:
-                                tp = float(r["target_price"].replace(",", "").replace("원", ""))
-                                upside = (tp - current_price) / current_price * 100
-                                line += f" ({upside:+.1f}%)"
-                            except Exception:
-                                pass
+                        try:
+                            tp = float(r["target_price"].replace(",", "").replace("원", ""))
+                            # 현재가 대비 5배 초과 목표주가는 스크래핑 오류로 제외
+                            if current_price > 0 and tp > current_price * 5:
+                                r["target_price"] = ""
+                            else:
+                                upside = (tp - current_price) / current_price * 100 if current_price > 0 else 0
+                                line += f" | 목표주가 {r['target_price']} ({upside:+.1f}%)"
+                        except Exception:
+                            line += f" | 목표주가 {r['target_price']}"
                     if r["opinion"]:
                         line += f" | {r['opinion']}"
                     if r["date"]:
