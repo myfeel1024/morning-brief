@@ -350,13 +350,11 @@ async def job_morning_brief(context) -> None:
         spec.loader.exec_module(mod)
         mod.run_morning_brief()
     except Exception as e:
-        try:
-            await context.bot.send_message(
-                chat_id=int(AUTHORIZED_CHAT),
-                text=f"⚠️ 자동 브리핑 실패: {e}"
-            )
-        except Exception:
-            pass
+        for cid in AUTHORIZED_CHATS:
+            try:
+                await context.bot.send_message(chat_id=int(cid), text=f"⚠️ 자동 브리핑 실패: {e}")
+            except Exception:
+                pass
 
 
 # ── /brief (모닝 브리핑 수동 실행) ───────────────────────────

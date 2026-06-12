@@ -432,19 +432,21 @@ def send_telegram(text: str):
     url      = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     max_len  = 4000
     chunks   = [text[i:i+max_len] for i in range(0, len(text), max_len)]
+    chat_ids = [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
 
-    for chunk in chunks:
-        payload = {
-            "chat_id"   : TELEGRAM_CHAT_ID,
-            "text"      : chunk,
-            "parse_mode": "Markdown",
-        }
-        try:
-            res = requests.post(url, data=payload, timeout=10)
-            if res.status_code != 200:
-                print(f"전송 오류: {res.text}")
-        except Exception as e:
-            print(f"전송 실패: {e}")
+    for cid in chat_ids:
+        for chunk in chunks:
+            payload = {
+                "chat_id"   : cid,
+                "text"      : chunk,
+                "parse_mode": "Markdown",
+            }
+            try:
+                res = requests.post(url, data=payload, timeout=10)
+                if res.status_code != 200:
+                    print(f"전송 오류 (chat_id={cid}): {res.text}")
+            except Exception as e:
+                print(f"전송 실패 (chat_id={cid}): {e}")
 
 
 # ── 6. 메인 실행 ──────────────────────────────────────────────
