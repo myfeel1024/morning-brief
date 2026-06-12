@@ -28,7 +28,7 @@ _load_env()
 TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-WINDOW_SEC = 12 * 60  # 12분 이내 메시지만 처리 (10분 주기 + 여유 2분)
+WINDOW_SEC = 30 * 60  # 30분 이내 메시지만 처리 (GitHub Actions 지연 대비)
 
 
 # ── Telegram API 헬퍼 ─────────────────────────────────────────
@@ -67,6 +67,7 @@ def get_recent_commands() -> list[dict]:
 
     now    = datetime.now(timezone.utc).timestamp()
     cmds   = []
+    mismatched_cmd_ids = []  # CHAT_ID 불일치로 무시된 명령어의 실제 chat_id
 
     for upd in updates:
         msg  = upd.get("message") or upd.get("edited_message", {})
@@ -83,8 +84,9 @@ def get_recent_commands() -> list[dict]:
 
         # 허가된 채팅 + 시간 윈도우 필터
         if chat_id != str(CHAT_ID):
-            if text.startswith("/"):
+            if text.startswith("/") and age_sec < WINDOW_SEC:
                 print(f"  [DEBUG] CHAT_ID 불일치 → 수신={chat_id}, 기대={CHAT_ID}")
+                mismatched_cmd_ids.append(chat_id)
             continue
         if now - ts > WINDOW_SEC:
             continue
@@ -97,6 +99,19 @@ def get_recent_commands() -> list[dict]:
             "update_id": upd.get("update_id"),
             "ts":        ts,
         })
+
+    # CHAT_ID 불일치가 있으면 설정된 CHAT_ID로 경고 전송
+    if mismatched_cmd_ids:
+        unique_ids = list(dict.fromkeys(mismatched_cmd_ids))
+        warn = (
+            "⚠️ *CHAT_ID 불일치 감지*\n\n"
+            "명령어가 수신됐지만 설정된 CHAT_ID와 달라서 무시됐어요.\n\n"
+            f"📌 *실제 수신된 Chat ID:*\n"
+            + "\n".join(f"`{cid}`" for cid in unique_ids)
+            + "\n\n위 ID를 GitHub Secrets의 `TELEGRAM_CHAT_ID`에 설정해주세요."
+        )
+        print(f"  [WARN] CHAT_ID 불일치 알림 전송: {unique_ids}")
+        tg_send(CHAT_ID, warn)
 
     return cmds
 
