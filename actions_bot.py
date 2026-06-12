@@ -175,6 +175,13 @@ def main():
         print("TELEGRAM_BOT_TOKEN 미설정")
         sys.exit(1)
 
+    # 토큰 유효성 확인
+    me = tg_get("getMe")
+    if not me.get("ok"):
+        print(f"[ERROR] 봇 토큰 오류: {me}")
+        sys.exit(1)
+    print(f"[OK] 봇 연결 확인: @{me['result'].get('username')} (id={me['result'].get('id')})")
+
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 명령어 확인 시작...")
     cmds = get_recent_commands()
 
