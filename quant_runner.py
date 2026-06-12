@@ -29,8 +29,9 @@ TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
 
 
-def send_telegram(text: str) -> None:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+def send_telegram(text: str, chat_id: str = "") -> None:
+    target = chat_id or TELEGRAM_CHAT_ID
+    if not TELEGRAM_BOT_TOKEN or not target:
         print(text)
         return
     url     = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -39,7 +40,7 @@ def send_telegram(text: str) -> None:
     for chunk in chunks:
         try:
             res = requests.post(url, data={
-                "chat_id":    TELEGRAM_CHAT_ID,
+                "chat_id":    target,
                 "text":       chunk,
                 "parse_mode": "Markdown",
             }, timeout=10)
@@ -49,7 +50,7 @@ def send_telegram(text: str) -> None:
             print(f"전송 실패: {e}")
 
 
-def run_quant_signal(top_n: int = 10) -> None:
+def run_quant_signal(top_n: int = 10, chat_id: str = "") -> None:
     """퀀트 신호 계산 후 텔레그램 전송"""
     now = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
     print(f"[{now}] 퀀트 신호 생성 시작...")
@@ -70,7 +71,7 @@ def run_quant_signal(top_n: int = 10) -> None:
         print("  → 가격 데이터 수집 중...")
         prices  = get_prices_batch(KOSPI_SAMPLE, days_ago_str(200), today_str(), verbose=False)
         if prices.empty:
-            send_telegram("⚠️ 퀀트 신호: 가격 데이터 수집 실패")
+            send_telegram("⚠️ 퀀트 신호: 가격 데이터 수집 실패", chat_id)
             return
 
         print("  → 팩터 스코어 계산 중...")
@@ -124,13 +125,13 @@ def run_quant_signal(top_n: int = 10) -> None:
         )
 
         print("  → 텔레그램 전송 중...")
-        send_telegram(message)
+        send_telegram(message, chat_id)
         print(f"[{now}] 완료!")
 
     except Exception as e:
         err_msg = f"⚠️ 퀀트 신호 생성 실패: {e}"
         print(err_msg)
-        send_telegram(err_msg)
+        send_telegram(err_msg, chat_id)
         sys.exit(1)
 
 

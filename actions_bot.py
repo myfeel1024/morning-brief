@@ -113,9 +113,7 @@ def handle_quant(chat_id: str, args: list[str]) -> None:
 
     try:
         from quant_runner import run_quant_signal
-        # run_quant_signal 은 내부적으로 send_telegram 을 호출하므로
-        # chat_id 가 TELEGRAM_CHAT_ID 와 동일하면 그냥 실행
-        run_quant_signal(top_n=top_n)
+        run_quant_signal(top_n=top_n, chat_id=chat_id)
     except Exception as e:
         tg_send(chat_id, f"❌ 퀀트 분석 실패: {e}")
 
