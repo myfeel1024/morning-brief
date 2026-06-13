@@ -180,8 +180,7 @@ def fetch_news(query: str = None, max_articles: int = 9):
         "reuters.com,bloomberg.com,wsj.com,ft.com,"
         "cnbc.com,marketwatch.com,economist.com,"
         "barrons.com,seekingalpha.com,apnews.com,"
-        "forbes.com,businessinsider.com,thestreet.com,"
-        "investing.com,finance.yahoo.com,benzinga.com"
+        "investing.com,finance.yahoo.com"
     )
 
     # 무의미한 헤드라인 필터 키워드
