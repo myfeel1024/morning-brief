@@ -364,16 +364,21 @@ async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("⏳ 모닝 브리핑 생성 중... (약 60초)")
     try:
-        # morning_brief 모듈 동적 임포트
-        import importlib, sys
+        import importlib
         spec = importlib.util.spec_from_file_location(
             "morning_brief",
             Path(__file__).resolve().parent / "morning_brief.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        mod.run_morning_brief()
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(None, mod.run_morning_brief),
+            timeout=180,
+        )
         await update.message.reply_text("✅ 브리핑 전송 완료!")
+    except asyncio.TimeoutError:
+        await update.message.reply_text("❌ 브리핑 생성 시간 초과 (3분). 잠시 후 다시 시도해주세요.")
     except Exception as e:
         await update.message.reply_text(f"❌ 브리핑 실패: {e}")
 
