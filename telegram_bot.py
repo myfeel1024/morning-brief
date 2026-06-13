@@ -243,8 +243,8 @@ def get_investor_flow(stock_name: str) -> str:
             return ""
         f_val = foreign.sum() / 1e8
         i_val = institution.sum() / 1e8
-        f_str = f"{'▲' if f_val >= 0 else '▼'}{abs(f_val):.0f}억"
-        i_str = f"{'▲' if i_val >= 0 else '▼'}{abs(i_val):.0f}억"
+        f_str = f"{'매수' if f_val >= 0 else '매도'} {abs(f_val):.0f}억"
+        i_str = f"{'매수' if i_val >= 0 else '매도'} {abs(i_val):.0f}억"
         return f"[최근5일 수급] 외국인 {f_str} / 기관 {i_str}"
     except Exception:
         return ""
