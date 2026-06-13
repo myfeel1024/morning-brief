@@ -168,13 +168,11 @@ def fetch_news(query: str = None, max_articles: int = 9):
     if not NEWS_API_KEY:
         return ["NewsAPI 키 미설정 — .env 파일에 NEWS_API_KEY를 입력하세요."]
 
-    # 경제지표 + 기업실적 + 통화정책 + 지정학 리스크 쿼리
+    # 경제·시장 전반 — 좁은 키워드 대신 도메인 내 기사 전반 수집
     if query is None:
         query = (
-            "Fed OR \"interest rate\" OR inflation OR CPI OR PPI OR \"Treasury yield\" "
-            "OR earnings OR revenue OR \"earnings surprise\" OR \"earnings beat\" OR \"earnings miss\" "
-            "OR recession OR tariff OR \"trade war\" "
-            "OR war OR Ukraine OR Gaza OR Iran OR sanctions OR geopolitics OR \"oil price\""
+            "stock OR market OR economy OR stocks OR finance OR investment "
+            "OR Fed OR inflation OR earnings OR tariff OR oil OR dollar"
         )
 
     # 경제·금융 전문지만 허용 (일반 뉴스·정치 매체 제외)
