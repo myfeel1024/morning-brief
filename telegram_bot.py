@@ -705,13 +705,34 @@ def _detect_stocks_in_text(text: str) -> list[str]:
     return found[:4]   # 최대 4개
 
 
+_KR_QUANT_TRIGGERS = [
+    "한국 퀀트", "한국퀀트", "코스피 퀀트", "코스피퀀트",
+    "국내 퀀트", "국내퀀트", "퀀트 신호", "퀀트신호",
+    "퀀트 알려줘", "퀀트알려줘",
+]
+_US_QUANT_TRIGGERS = [
+    "미국 퀀트", "미국퀀트", "나스닥 퀀트", "나스닥퀀트",
+    "us 퀀트", "us퀀트", "미국 주식 퀀트", "미국주식퀀트",
+]
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update):
         return
 
     question = update.message.text.strip()
     chat_id  = update.effective_chat.id
-    msg      = await update.message.reply_text("💭 분석 중...")
+
+    # ── 퀀트 대화체 감지 ──
+    q_lower = question.lower()
+    if any(t in q_lower for t in _US_QUANT_TRIGGERS):
+        await cmd_quant_us(update, context)
+        return
+    if any(t in q_lower for t in _KR_QUANT_TRIGGERS):
+        await cmd_quant(update, context)
+        return
+
+    msg = await update.message.reply_text("💭 분석 중...")
 
     # ── 매크로 & 뉴스 (해외 + 국내) ──
     macro      = get_macro_context()
