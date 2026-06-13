@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 TOKEN         = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -132,35 +132,30 @@ def run_us_quant(top_n: int = 10) -> str:
         if t not in ticker_to_sector:
             ticker_to_sector[t] = "📊 S&P500"
 
-    now   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    KST_TZ = timezone(timedelta(hours=9))
+    kst  = datetime.now(KST_TZ).strftime("%Y년 %m월 %d일 %H:%M")
+
     lines = [
-        f"🇺🇸 미국 퀀트 신호 ({now})",
+        f"🇺🇸 미국 퀀트 신호 브리핑 {kst}",
         f"섹터 대표주 55 + S&P500 상위50 ({len(df)}개 분석)",
         "",
+        f"미국 팩터 신호 상위 {top_n}",
+        f"{'순위':<4} {'종목':<6} {'섹터':<12} {'점수':>5}  {'신호':<8} {'3M수익':>7}  {'6M수익':>7}  RSI",
+        "─" * 62,
     ]
 
-    # ── 섹터별 1위 ──
-    lines.append("📊 섹터별 1위")
-    sector_tops = []
-    for sector, tickers in SECTOR_UNIVERSE.items():
-        sub = df[df.index.isin(tickers)]
-        if sub.empty:
-            continue
-        best_ticker = sub.index[0]
-        best_row    = sub.iloc[0]
-        sector_tops.append(best_ticker)
-        m3  = f"{best_row['mom3m']*100:+.1f}%" if not np.isnan(best_row["mom3m"]) else "N/A"
-        ma  = "↑" if best_row["ma_cross"] else "↓"
-        lines.append(
-            f"{sector:<14} {best_row['signal']} {best_ticker:<5} "
-            f"스코어:{best_row['score']:.2f}  3M:{m3}  MA:{ma}"
-        )
-
-    # ── 전체 TOP N ──
-    lines += ["", f"🏆 전체 TOP {top_n}"]
     for i, (ticker, row) in enumerate(df.head(top_n).iterrows(), 1):
-        sec = ticker_to_sector.get(ticker, "")
-        lines.append(f"{i:2}. [{sec}] {_fmt_row(ticker, row)}")
+        sec  = ticker_to_sector.get(ticker, "S&P500")
+        # 섹터명 이모지 제거해서 짧게
+        sec_short = sec.split()[-1] if " " in sec else sec
+        sig  = row["signal"]
+        m3   = f"{row['mom3m']*100:+.1f}%" if not np.isnan(row["mom3m"]) else " N/A "
+        m6   = f"{row['mom6m']*100:+.1f}%" if not np.isnan(row["mom6m"]) else " N/A "
+        lines.append(
+            f"{i:2}. {ticker:<6} [{sec_short:<10}]  "
+            f"{row['score']:.2f}  {sig}  {m3:>7}  {m6:>7}  {row['rsi']:.0f}"
+            f"  MA:{'↑' if row['ma_cross'] else '↓'}  ${row['price']:,.1f}"
+        )
 
     # ── AI 코멘트 ──
     try:
