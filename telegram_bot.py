@@ -893,17 +893,10 @@ async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── 봇 실행 ───────────────────────────────────────────────────
 
-def main():
-    if not TOKEN:
-        raise ValueError("TELEGRAM_BOT_TOKEN이 설정되지 않았습니다.")
+from aiohttp import web as _web
 
-    port = int(os.getenv("PORT", 10000))
-    render_url = (os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/") or
-                  "https://morning-brief-bot-cvfd.onrender.com")
-    webhook_path = f"/{TOKEN}"
-
+def _build_app() -> Application:
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("help",      cmd_start))
     app.add_handler(CommandHandler("market",    cmd_market))
@@ -913,25 +906,66 @@ def main():
     app.add_handler(CommandHandler("rebalance", cmd_rebalance))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
     app.job_queue.run_daily(
         job_morning_brief,
         time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
         name="morning_brief_daily",
     )
+    return app
+
+
+async def _async_main():
+    port       = int(os.getenv("PORT", 10000))
+    render_url = (os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/") or
+                  "https://morning-brief-bot-cvfd.onrender.com")
+    wh_path    = f"/{TOKEN}"
+
+    ptb = _build_app()
+
+    # aiohttp 서버: GET / → 헬스체크(200), POST /{TOKEN} → webhook
+    async def on_health(req):
+        return _web.Response(text="OK")
+
+    async def on_webhook(req):
+        try:
+            data   = await req.json()
+            update = Update.de_json(data, ptb.bot)
+            await ptb.update_queue.put(update)
+        except Exception:
+            pass
+        return _web.Response(text="OK")
+
+    web_app = _web.Application()
+    web_app.router.add_get("/",      on_health)
+    web_app.router.add_post(wh_path, on_webhook)
+
+    runner = _web.AppRunner(web_app)
+    await runner.setup()
+    await _web.TCPSite(runner, "0.0.0.0", port).start()
+
+    await ptb.initialize()
+    await ptb.bot.set_webhook(
+        url=f"{render_url}{wh_path}",
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+    )
+    await ptb.start()
 
     now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now_kst} KST] 봇 시작! (webhook port={port})")
+    print(f"[{now_kst} KST] 봇 시작! (aiohttp webhook port={port})", flush=True)
 
-    # PTB 네이티브 webhook — Conflict 원천 불가, polling 없음
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=webhook_path,
-        webhook_url=f"{render_url}{webhook_path}",
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await ptb.stop()
+        await ptb.shutdown()
+        await runner.cleanup()
+
+
+def main():
+    if not TOKEN:
+        raise ValueError("TELEGRAM_BOT_TOKEN이 설정되지 않았습니다.")
+    asyncio.run(_async_main())
 
 
 if __name__ == "__main__":
