@@ -353,9 +353,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  예) /quant 15\n"
         "/quant\\_us   — 미국 퀀트 신호 (S\\&P500·섹터)\n"
         "  예) /quant\\_us 15\n"
-        "/portfolio    — 보유 종목 현황 + 수익률\n"
-        "/rebalance    — 리밸런싱 계산\n"
-        "  예) /rebalance 10 apply\n"
         "/alert        — 가격 알림 설정·조회·취소\n"
         "  예) /alert 삼성전자 70000\n"
         "  예) /alert AAPL 200\n"
@@ -574,16 +571,19 @@ async def cmd_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─ cancel
     if args[0].lower() in ("cancel", "취소", "삭제") and len(args) >= 2:
-        try:
-            cid     = int(args[1])
-            before  = len(user_alerts)
-            user_alerts = [a for a in user_alerts if a["id"] != cid]
-            alerts[chat_id] = user_alerts
-            _save_alerts(alerts)
-            msg = f"✅ {cid}번 알림 취소 완료." if len(user_alerts) < before else f"❌ {cid}번 알림을 찾을 수 없습니다."
-            await update.message.reply_text(msg)
-        except ValueError:
-            await update.message.reply_text("사용법: /alert cancel <번호>")
+        cancel_arg = " ".join(args[1:])
+        before = len(user_alerts)
+        if cancel_arg.isdigit():
+            user_alerts = [a for a in user_alerts if a["id"] != int(cancel_arg)]
+            desc = f"{cancel_arg}번"
+        else:
+            user_alerts = [a for a in user_alerts if cancel_arg not in a["name"]]
+            desc = f"'{cancel_arg}'"
+        alerts[chat_id] = user_alerts
+        _save_alerts(alerts)
+        removed = before - len(user_alerts)
+        msg = f"✅ {desc} 알림 {removed}개 취소 완료." if removed else f"❌ {desc} 알림을 찾을 수 없습니다."
+        await update.message.reply_text(msg)
         return
 
     # ─ 신규 등록
@@ -1000,6 +1000,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cmd_quant(update, context)
         return
 
+    # ── 가격 알림 취소 자연어 감지 ──
+    # 예) "삼성전자 알림 취소해줘", "AAPL 알림 꺼줘"
+    if "알림" in question and any(w in question for w in ["취소", "삭제", "꺼줘", "지워줘"]):
+        stocks_to_cancel = _detect_stocks_in_text(question)
+        if stocks_to_cancel:
+            cid_str     = str(update.effective_chat.id)
+            name        = stocks_to_cancel[0]
+            alerts      = _load_alerts()
+            user_alerts = alerts.get(cid_str, [])
+            before      = len(user_alerts)
+            alerts[cid_str] = [a for a in user_alerts if name not in a["name"]]
+            _save_alerts(alerts)
+            removed = before - len(alerts[cid_str])
+            reply   = f"✅ '{name}' 알림 {removed}개 취소 완료." if removed else f"❌ '{name}' 등록된 알림이 없습니다."
+            await update.message.reply_text(reply)
+            return
+
     # ── 가격 알림 자연어 감지 ──
     # 예) "삼성전자 7만원 넘으면 알려줘", "AAPL 200달러 되면 알림"
     if any(kw in question for kw in _ALERT_NATURAL_WORDS):
@@ -1246,8 +1263,6 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("brief",     cmd_brief))
     app.add_handler(CommandHandler("quant",     cmd_quant))
     app.add_handler(CommandHandler("quant_us",  cmd_quant_us))
-    app.add_handler(CommandHandler("portfolio", cmd_portfolio))
-    app.add_handler(CommandHandler("rebalance", cmd_rebalance))
     app.add_handler(CommandHandler("alert",     cmd_alert))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
