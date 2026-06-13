@@ -419,7 +419,33 @@ def extract_portfolio_from_image(image_path: str):
         return stocks, f"포트폴리오 분석 실패: {e}"
 
 
-# ── 5. 텔레그램 전송 ──────────────────────────────────────────
+# ── 5. CNN 공포탐욕지수 ──────────────────────────────────────
+
+def get_fear_greed() -> str:
+    """CNN Fear & Greed Index 한 줄 요약. 실패 시 빈 문자열."""
+    try:
+        res  = requests.get(
+            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/",
+            timeout=6,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        data  = res.json()
+        score = data["fear_and_greed"]["score"]
+        rating = data["fear_and_greed"]["rating"]
+        emoji = {
+            "Extreme Fear": "😱", "Fear": "😨",
+            "Neutral": "😐", "Greed": "😄", "Extreme Greed": "🤑",
+        }.get(rating, "📊")
+        label = {
+            "Extreme Fear": "극도의 공포", "Fear": "공포",
+            "Neutral": "중립", "Greed": "탐욕", "Extreme Greed": "극도의 탐욕",
+        }.get(rating, rating)
+        return f"{emoji} CNN 공포탐욕지수: {score:.0f}점 — {label}"
+    except Exception:
+        return ""
+
+
+# ── 6. 텔레그램 전송 ──────────────────────────────────────────
 
 def send_telegram(text: str, send_to: list[str] | None = None):
     """텔레그램 봇으로 메시지 전송 (4096자 초과 시 분할).
@@ -490,10 +516,14 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
     ai_analysis = analyze_with_claude(market_data, news_kr, portfolio or None)
     ai_block    = f"🤖 *AI 코스피 전략*\n{ai_analysis}"
 
+    # ─ 공포탐욕지수
+    fear_greed = get_fear_greed()
+
     # ─ 최종 메시지 조합
     separator = "\n" + "─" * 28 + "\n"
     message = (
         f"🇺🇸 *코스피 모닝 브리핑*\n`{now}`"
+        + (f"\n{fear_greed}" if fear_greed else "")
         + separator
         + market_summary
         + separator

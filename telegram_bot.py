@@ -15,6 +15,7 @@
 """
 
 import os
+import re
 import base64
 import json
 import asyncio
@@ -134,6 +135,20 @@ def _load_env_file():
 
 _load_env_file()
 
+_ALERTS_FILE = Path(__file__).resolve().parent / "alerts.json"
+
+def _load_alerts() -> dict:
+    if _ALERTS_FILE.exists():
+        try:
+            return json.loads(_ALERTS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _save_alerts(data: dict) -> None:
+    _ALERTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 TOKEN            = os.getenv("TELEGRAM_BOT_TOKEN", "")
 AUTHORIZED_CHATS = {
     s.strip() for s in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if s.strip()
@@ -204,6 +219,62 @@ def format_macro(data: dict) -> str:
         sign  = "+" if d["pct"] >= 0 else ""
         lines.append(f"{name:<14}: {d['price']:>10,.2f}  {arrow}{sign}{d['pct']:.2f}%")
     return "\n".join(lines)
+
+
+# ── 외국인·기관 순매수 (pykrx) ───────────────────────────────
+
+def get_investor_flow(stock_name: str) -> str:
+    """최근 5거래일 외국인·기관 순매수 (한국 주식 전용). 실패 시 빈 문자열."""
+    try:
+        from pykrx import stock as pk
+        from stock_research import get_kr_stock_code
+        code = get_kr_stock_code(stock_name)
+        if not code:
+            return ""
+        end   = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=14)).strftime("%Y%m%d")
+        df = pk.get_market_trading_value_by_investor(start, end, code)
+        if df is None or df.empty:
+            return ""
+        df = df.tail(5)
+        foreign     = df.get("외국인합계", df.get("외국인", None))
+        institution = df.get("기관합계",   df.get("기관",   None))
+        if foreign is None or institution is None:
+            return ""
+        f_val = foreign.sum() / 1e8
+        i_val = institution.sum() / 1e8
+        f_str = f"{'▲' if f_val >= 0 else '▼'}{abs(f_val):.0f}억"
+        i_str = f"{'▲' if i_val >= 0 else '▼'}{abs(i_val):.0f}억"
+        return f"[최근5일 수급] 외국인 {f_str} / 기관 {i_str}"
+    except Exception:
+        return ""
+
+
+# ── 가격 알림 — 현재가 조회 ───────────────────────────────────
+
+def _get_yf_price(name_or_ticker: str) -> tuple[str, float]:
+    """종목명 또는 티커 → (yfinance ticker 문자열, 현재가). 실패 시 ('', 0.0)."""
+    from stock_research import get_kr_stock_code
+    stripped = name_or_ticker.strip()
+    # 미국 티커: 대문자 알파벳 1~5자 (BRK-B 등 하이픈 포함 허용)
+    if re.match(r'^[A-Z]{1,5}(-[A-Z])?$', stripped):
+        try:
+            price = yf.Ticker(stripped).fast_info.last_price
+            return (stripped, float(price)) if price else ("", 0.0)
+        except Exception:
+            return "", 0.0
+    # 한국 주식: 이름 → 종목코드 → .KS/.KQ
+    code = get_kr_stock_code(stripped)
+    if not code:
+        return "", 0.0
+    for sfx in [".KS", ".KQ"]:
+        try:
+            price = yf.Ticker(f"{code}{sfx}").fast_info.last_price
+            if price:
+                return f"{code}{sfx}", float(price)
+        except Exception:
+            continue
+    return "", 0.0
 
 
 # ── Claude 클라이언트 ─────────────────────────────────────────
@@ -283,6 +354,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/portfolio — 보유 종목 현황 + 수익률\n"
         "/rebalance — 리밸런싱 계산\n"
         "  예) /rebalance 10 apply  (저장까지)\n"
+        "/alert     — 가격 알림 설정\n"
+        "  예) /alert 삼성전자 70000\n"
+        "  예) /alert AAPL 200\n"
         "/help      — 도움말",
         parse_mode="Markdown",
     )
@@ -384,6 +458,136 @@ async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 브리핑 실패: {e}")
 
 
+# ── /alert (가격 알림) ────────────────────────────────────────
+
+async def cmd_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+    chat_id = str(update.effective_chat.id)
+    args    = context.args or []
+
+    HELP = (
+        "📌 가격 알림 사용법\n\n"
+        "/alert 삼성전자 70000  — 70,000원 도달 시 알림\n"
+        "/alert AAPL 200        — $200 도달 시 알림\n"
+        "/alert list            — 등록된 알림 목록\n"
+        "/alert cancel 1        — 1번 알림 취소"
+    )
+
+    if not args:
+        await update.message.reply_text(HELP)
+        return
+
+    alerts      = _load_alerts()
+    user_alerts = alerts.get(chat_id, [])
+
+    # ─ list
+    if args[0].lower() in ("list", "목록"):
+        if not user_alerts:
+            await update.message.reply_text("등록된 알림이 없습니다.")
+            return
+        lines = ["📋 등록된 가격 알림\n"]
+        for a in user_alerts:
+            d_str = "이상 도달" if a["direction"] == "above" else "이하 하락"
+            cur   = "원" if a["ticker"].endswith((".KS", ".KQ")) else "$"
+            lines.append(f"{a['id']}. {a['name']}  {cur}{a['target']:,} {d_str}")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    # ─ cancel
+    if args[0].lower() in ("cancel", "취소", "삭제") and len(args) >= 2:
+        try:
+            cid     = int(args[1])
+            before  = len(user_alerts)
+            user_alerts = [a for a in user_alerts if a["id"] != cid]
+            alerts[chat_id] = user_alerts
+            _save_alerts(alerts)
+            msg = f"✅ {cid}번 알림 취소 완료." if len(user_alerts) < before else f"❌ {cid}번 알림을 찾을 수 없습니다."
+            await update.message.reply_text(msg)
+        except ValueError:
+            await update.message.reply_text("사용법: /alert cancel <번호>")
+        return
+
+    # ─ 신규 등록
+    if len(args) < 2:
+        await update.message.reply_text(HELP)
+        return
+
+    try:
+        target = float(args[1].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("가격은 숫자로 입력해주세요.\n예) /alert 삼성전자 70000")
+        return
+
+    await update.message.reply_text(f"⏳ {args[0]} 현재가 조회 중...")
+    yf_ticker, current = _get_yf_price(args[0])
+    if not yf_ticker:
+        await update.message.reply_text(f"❌ '{args[0]}' 종목을 찾을 수 없습니다.\n(종목명이나 미국 티커를 대문자로 입력해주세요)")
+        return
+
+    direction = "above" if target > current else "below"
+    new_id    = max((a["id"] for a in user_alerts), default=0) + 1
+    user_alerts.append({
+        "id": new_id, "name": args[0], "ticker": yf_ticker,
+        "target": target, "direction": direction,
+        "created_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
+    })
+    alerts[chat_id] = user_alerts
+    _save_alerts(alerts)
+
+    cur      = "원" if yf_ticker.endswith((".KS", ".KQ")) else "$"
+    d_str    = "이상 도달 시" if direction == "above" else "이하 하락 시"
+    await update.message.reply_text(
+        f"✅ 가격 알림 등록!\n\n"
+        f"종목: {args[0]}\n"
+        f"현재가: {cur}{current:,.0f}\n"
+        f"조건: {cur}{target:,.0f} {d_str} 알림\n"
+        f"알림 번호: {new_id}"
+    )
+
+
+# ── 가격 알림 체크 잡 (5분마다) ──────────────────────────────
+
+async def job_check_alerts(context) -> None:
+    alerts = _load_alerts()
+    if not alerts:
+        return
+    changed = False
+    for chat_id, user_alerts in list(alerts.items()):
+        remaining = []
+        for a in user_alerts:
+            try:
+                price = yf.Ticker(a["ticker"]).fast_info.last_price
+                if not price:
+                    remaining.append(a)
+                    continue
+                hit = (
+                    (a["direction"] == "above" and price >= a["target"]) or
+                    (a["direction"] == "below" and price <= a["target"])
+                )
+                if hit:
+                    cur   = "원" if a["ticker"].endswith((".KS", ".KQ")) else "$"
+                    d_str = "🔺 목표가 돌파" if a["direction"] == "above" else "🔻 목표가 하락"
+                    await context.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=(
+                            f"🔔 가격 알림!\n\n"
+                            f"종목: {a['name']}\n"
+                            f"{d_str}\n"
+                            f"목표가: {cur}{a['target']:,.0f}\n"
+                            f"현재가: {cur}{price:,.0f}"
+                        ),
+                    )
+                    changed = True
+                else:
+                    remaining.append(a)
+            except Exception:
+                remaining.append(a)
+        alerts[chat_id] = remaining
+    if changed:
+        _save_alerts(alerts)
+
+
 # ── 사진 메시지 처리 ──────────────────────────────────────────
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -451,6 +655,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for s in stocks[:6]:
             data = research_stock(s)
             if data and "리서치 데이터 없음" not in data:
+                flow = get_investor_flow(s)
+                if flow:
+                    data += f"\n{flow}"
                 research_parts.append(data)
         research_text = "\n\n".join(research_parts) if research_parts else "수집된 리서치 데이터 없음"
 
@@ -514,6 +721,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stock_info = f"종목: {chart_stock}" if chart_stock else ""
         ind_info   = f"확인된 지표: {indicators}" if indicators else ""
 
+        # 수급 데이터
+        flow_info = get_investor_flow(chart_stock) if chart_stock else ""
+
         # BB: yfinance 실제 계산 (종목 인식된 경우) → 시각 감지 대체
         bb_info = ""
         if chart_stock and "볼린저밴드" in (indicators or ""):
@@ -561,6 +771,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {stock_info}
 {ind_info}
 {bb_info}
+{flow_info}
 
 [현재 매크로 환경]
 {macro_text}
@@ -755,6 +966,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for stock in detected:
             data = research_stock(stock)
             if data and "데이터 없음" not in data:
+                flow = get_investor_flow(stock)
+                if flow:
+                    data += f"\n{flow}"
                 parts.append(data)
                 # 현재가 추출 → 상단 명시용
                 for line in data.splitlines():
@@ -962,12 +1176,19 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("quant_us",  cmd_quant_us))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(CommandHandler("rebalance", cmd_rebalance))
+    app.add_handler(CommandHandler("alert",     cmd_alert))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.job_queue.run_daily(
         job_morning_brief,
         time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
         name="morning_brief_daily",
+    )
+    app.job_queue.run_repeating(
+        job_check_alerts,
+        interval=300,   # 5분마다
+        first=60,
+        name="price_alert_check",
     )
     return app
 
