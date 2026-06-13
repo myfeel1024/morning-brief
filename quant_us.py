@@ -29,7 +29,17 @@ SECTOR_UNIVERSE = {
     "⚡ 유틸리티":     ["NEE",  "DUK",  "SO",   "D",    "AEP" ],
 }
 
-ALL_TICKERS = [t for tickers in SECTOR_UNIVERSE.values() for t in tickers]
+# S&P 500 시총 상위 50 (섹터 대표주와 중복 허용 — 합산 후 중복 제거)
+SP500_TOP50 = [
+    "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","BRK-B","TSLA","AVGO",
+    "JPM","LLY","V","UNH","XOM","MA","COST","HD","PG","NFLX",
+    "JNJ","ABBV","BAC","CRM","WMT","AMD","MRK","ORCL","CVX","ACN",
+    "TMO","LIN","MCD","QCOM","GE","ADBE","IBM","TXN","PM","INTU",
+    "CAT","ISRG","GS","AMGN","SPGI","BKNG","HON","NOW","RTX","UNP",
+]
+
+_SECTOR_TICKERS = [t for tickers in SECTOR_UNIVERSE.values() for t in tickers]
+ALL_TICKERS     = list(dict.fromkeys(_SECTOR_TICKERS + SP500_TOP50))  # 중복 제거, 순서 유지
 
 WEIGHTS = {
     "mom1m":   0.10,
@@ -116,13 +126,16 @@ def run_us_quant(top_n: int = 10) -> str:
     print(f"[US Quant] 팩터 계산 중... ({closes.shape[1]}개 종목)", flush=True)
     df = _compute_factors(closes)
 
-    # 티커 → 섹터 역매핑
+    # 티커 → 섹터 역매핑 (섹터 미분류는 S&P500 표기)
     ticker_to_sector = {t: sec for sec, tickers in SECTOR_UNIVERSE.items() for t in tickers}
+    for t in SP500_TOP50:
+        if t not in ticker_to_sector:
+            ticker_to_sector[t] = "📊 S&P500"
 
     now   = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         f"🇺🇸 미국 퀀트 신호 ({now})",
-        f"GICS 11개 섹터 × 5종목 ({len(df)}개 분석)",
+        f"섹터 대표주 55 + S&P500 상위50 ({len(df)}개 분석)",
         "",
     ]
 
