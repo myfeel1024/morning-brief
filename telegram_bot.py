@@ -458,6 +458,76 @@ async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 브리핑 실패: {e}")
 
 
+# ── 가격 알림 — 한국어 숫자 파싱 & 공통 등록 로직 ──────────────
+
+def _parse_korean_price(text: str) -> float | None:
+    """'7만원', '7만5천', '70,000', '200.5' 등 → float. 실패 시 None."""
+    t = re.sub(r'[원달러불$,\s]', '', text.strip())
+    if not t:
+        return None
+    try:
+        return float(t)
+    except ValueError:
+        pass
+    total = 0.0
+    found = False
+    for pat, mul in [
+        (r'(\d+\.?\d*)조', 1_000_000_000_000),
+        (r'(\d+\.?\d*)억', 100_000_000),
+        (r'(\d+\.?\d*)만', 10_000),
+        (r'(\d+\.?\d*)천', 1_000),
+        (r'(\d+\.?\d*)백', 100),
+    ]:
+        m = re.search(pat, t)
+        if m:
+            total += float(m.group(1)) * mul
+            found = True
+    return total if found else None
+
+
+_ABOVE_WORDS          = ["넘으면", "초과", "올라가면", "오르면", "이상", "돌파", "달성"]
+_BELOW_WORDS          = ["떨어지면", "내려가면", "이하", "하락", "빠지면", "밑으로"]
+_ALERT_NATURAL_WORDS  = ["알려줘", "알림", "알려", "등록해줘"]
+
+_PRICE_RE = re.compile(
+    r'\d+\.?\d*\s*(?:조|억|만|천|백)(?:\s*\d+\.?\d*\s*(?:억|만|천|백))*\s*원?'
+    r'|\d[\d,]+\s*원'
+    r'|\d+\.?\d*\s*(?:달러|불|\$)'
+    r'|\d[\d,]+'
+)
+
+
+async def _do_register_alert(update, name: str, target: float, direction: str | None) -> None:
+    """알림 등록 공통 로직 (cmd_alert·handle_text 공유)."""
+    chat_id = str(update.effective_chat.id)
+    await update.message.reply_text(f"⏳ {name} 현재가 조회 중...")
+    yf_ticker, current = _get_yf_price(name)
+    if not yf_ticker:
+        await update.message.reply_text(f"❌ '{name}' 종목을 찾을 수 없습니다.")
+        return
+    if direction is None:
+        direction = "above" if target > current else "below"
+    alerts      = _load_alerts()
+    user_alerts = alerts.get(chat_id, [])
+    new_id      = max((a["id"] for a in user_alerts), default=0) + 1
+    user_alerts.append({
+        "id": new_id, "name": name, "ticker": yf_ticker,
+        "target": target, "direction": direction,
+        "created_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
+    })
+    alerts[chat_id] = user_alerts
+    _save_alerts(alerts)
+    cur   = "원" if yf_ticker.endswith((".KS", ".KQ")) else "$"
+    d_str = "이상 도달 시" if direction == "above" else "이하 하락 시"
+    await update.message.reply_text(
+        f"✅ 가격 알림 등록!\n\n"
+        f"종목: {name}\n"
+        f"현재가: {cur}{current:,.0f}\n"
+        f"조건: {cur}{target:,.0f} {d_str} 알림\n"
+        f"알림 번호: {new_id}"
+    )
+
+
 # ── /alert (가격 알림) ────────────────────────────────────────
 
 async def cmd_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -513,37 +583,15 @@ async def cmd_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(HELP)
         return
 
-    try:
-        target = float(args[1].replace(",", ""))
-    except ValueError:
-        await update.message.reply_text("가격은 숫자로 입력해주세요.\n예) /alert 삼성전자 70000")
+    # 가격 파싱 — 숫자("70000") 또는 한국어("7만원", "7만5천") 모두 허용
+    raw_price = " ".join(args[1:])   # "/alert 삼성전자 7만 5천" 처럼 띄어쓴 경우 합치기
+    target = _parse_korean_price(raw_price)
+    if not target or target <= 0:
+        await update.message.reply_text("가격을 인식하지 못했습니다.\n예) /alert 삼성전자 70000\n예) /alert 삼성전자 7만원")
         return
 
-    await update.message.reply_text(f"⏳ {args[0]} 현재가 조회 중...")
-    yf_ticker, current = _get_yf_price(args[0])
-    if not yf_ticker:
-        await update.message.reply_text(f"❌ '{args[0]}' 종목을 찾을 수 없습니다.\n(종목명이나 미국 티커를 대문자로 입력해주세요)")
-        return
-
-    direction = "above" if target > current else "below"
-    new_id    = max((a["id"] for a in user_alerts), default=0) + 1
-    user_alerts.append({
-        "id": new_id, "name": args[0], "ticker": yf_ticker,
-        "target": target, "direction": direction,
-        "created_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
-    })
-    alerts[chat_id] = user_alerts
-    _save_alerts(alerts)
-
-    cur      = "원" if yf_ticker.endswith((".KS", ".KQ")) else "$"
-    d_str    = "이상 도달 시" if direction == "above" else "이하 하락 시"
-    await update.message.reply_text(
-        f"✅ 가격 알림 등록!\n\n"
-        f"종목: {args[0]}\n"
-        f"현재가: {cur}{current:,.0f}\n"
-        f"조건: {cur}{target:,.0f} {d_str} 알림\n"
-        f"알림 번호: {new_id}"
-    )
+    direction = None   # _do_register_alert 에서 현재가와 비교해 자동 판단
+    await _do_register_alert(update, args[0], target, direction)
 
 
 # ── 가격 알림 체크 잡 (5분마다) ──────────────────────────────
@@ -943,6 +991,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if any(t in q_lower for t in _KR_QUANT_TRIGGERS):
         await cmd_quant(update, context)
         return
+
+    # ── 가격 알림 자연어 감지 ──
+    # 예) "삼성전자 7만원 넘으면 알려줘", "AAPL 200달러 되면 알림"
+    if any(kw in question for kw in _ALERT_NATURAL_WORDS):
+        stocks_for_alert = _detect_stocks_in_text(question)
+        price_match = _PRICE_RE.search(question)
+        if stocks_for_alert and price_match:
+            target = _parse_korean_price(price_match.group(0))
+            if target and target > 0:
+                direction = None
+                if any(w in question for w in _ABOVE_WORDS):
+                    direction = "above"
+                elif any(w in question for w in _BELOW_WORDS):
+                    direction = "below"
+                await _do_register_alert(update, stocks_for_alert[0], target, direction)
+                return
 
     msg = await update.message.reply_text("💭 분석 중...")
 
