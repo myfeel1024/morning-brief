@@ -181,7 +181,9 @@ def fetch_news(query: str = None, max_articles: int = 9):
     trusted_domains = (
         "reuters.com,bloomberg.com,wsj.com,ft.com,"
         "cnbc.com,marketwatch.com,economist.com,"
-        "barrons.com,seekingalpha.com,apnews.com"
+        "barrons.com,seekingalpha.com,apnews.com,"
+        "forbes.com,businessinsider.com,thestreet.com,"
+        "investing.com,finance.yahoo.com,benzinga.com"
     )
 
     # 무의미한 헤드라인 필터 키워드
@@ -191,12 +193,13 @@ def fetch_news(query: str = None, max_articles: int = 9):
         "today in", "this week in", "roundup",
     ]
 
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    # 2일치 범위로 확대 (UTC 기준 어제 뉴스가 KST 오전에 누락되는 경우 방지)
+    two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
     url = (
         "https://newsapi.org/v2/everything"
         f"?q={requests.utils.quote(query)}"
         f"&domains={trusted_domains}"
-        f"&from={yesterday}"
+        f"&from={two_days_ago}"
         "&language=en"
         "&sortBy=relevancy"
         f"&pageSize={max_articles}"
@@ -464,7 +467,7 @@ def run_morning_brief(portfolio_image_path: str = None):
     news_list = fetch_news()                                  # 기본 쿼리(경제·금리·지정학)
     news_kr   = translate_headlines_to_korean(news_list)     # 한국어 번역
     news_block = "📰 *주요 뉴스*\n" + "\n".join(
-        f"• {h}" for h in news_kr[:6]
+        f"• {h}" for h in news_kr[:8]
     )
 
     # ─ 포트폴리오 이미지 처리
