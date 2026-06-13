@@ -860,6 +860,35 @@ async def cmd_rebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ 리밸런싱 오류: {e}")
 
 
+# ── /quant_us (미국 퀀트 신호) ───────────────────────────────────
+
+async def cmd_quant_us(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+
+    top_n = 15
+    for arg in (context.args or []):
+        if arg.isdigit():
+            top_n = int(arg)
+
+    await update.message.reply_text(
+        f"⏳ 미국 퀀트 분석 중... (1~2분 소요)\n"
+        f"S&P500 상위 + Nasdaq100 팩터 스코어링 (상위 {top_n}종목)"
+    )
+    try:
+        from quant_us import run_us_quant
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: run_us_quant(top_n)),
+            timeout=300,
+        )
+        await update.message.reply_text("✅ 미국 퀀트 분석 완료!")
+    except asyncio.TimeoutError:
+        await update.message.reply_text("❌ 시간 초과 (5분). 잠시 후 다시 시도해주세요.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ 오류: {e}")
+
+
 # ── /quant (퀀트 신호) ────────────────────────────────────────
 
 async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -907,6 +936,7 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("market",    cmd_market))
     app.add_handler(CommandHandler("brief",     cmd_brief))
     app.add_handler(CommandHandler("quant",     cmd_quant))
+    app.add_handler(CommandHandler("quant_us",  cmd_quant_us))
     app.add_handler(CommandHandler("portfolio", cmd_portfolio))
     app.add_handler(CommandHandler("rebalance", cmd_rebalance))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
