@@ -193,13 +193,12 @@ def fetch_news(query: str = None, max_articles: int = 9):
         "today in", "this week in", "roundup",
     ]
 
-    # 2일치 범위로 확대 (UTC 기준 어제 뉴스가 KST 오전에 누락되는 경우 방지)
-    two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
     url = (
         "https://newsapi.org/v2/everything"
         f"?q={requests.utils.quote(query)}"
         f"&domains={trusted_domains}"
-        f"&from={two_days_ago}"
+        f"&from={yesterday}"
         "&language=en"
         "&sortBy=relevancy"
         f"&pageSize={max_articles}"
