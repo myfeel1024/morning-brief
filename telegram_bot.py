@@ -371,9 +371,10 @@ async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        requester = str(update.effective_chat.id)
         loop = asyncio.get_event_loop()
         await asyncio.wait_for(
-            loop.run_in_executor(None, mod.run_morning_brief),
+            loop.run_in_executor(None, lambda: mod.run_morning_brief(send_to=[requester])),
             timeout=180,
         )
         await update.message.reply_text("✅ 브리핑 전송 완료!")
@@ -898,9 +899,10 @@ async def cmd_quant_us(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     try:
         from quant_us import run_us_quant
+        requester = str(update.effective_chat.id)
         loop = asyncio.get_event_loop()
         await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: run_us_quant(top_n)),
+            loop.run_in_executor(None, lambda: run_us_quant(top_n, send_to=[requester])),
             timeout=300,
         )
         await update.message.reply_text("✅ 미국 퀀트 분석 완료!")

@@ -421,8 +421,10 @@ def extract_portfolio_from_image(image_path: str):
 
 # ── 5. 텔레그램 전송 ──────────────────────────────────────────
 
-def send_telegram(text: str):
-    """텔레그램 봇으로 메시지 전송 (4096자 초과 시 분할)"""
+def send_telegram(text: str, send_to: list[str] | None = None):
+    """텔레그램 봇으로 메시지 전송 (4096자 초과 시 분할).
+    send_to 지정 시 해당 chat_id 목록에만 전송, 없으면 전체 브로드캐스트.
+    """
     if not TELEGRAM_BOT_TOKEN:
         print("⚠️  텔레그램 설정 없음 — 콘솔에만 출력합니다.\n")
         print(text)
@@ -431,7 +433,7 @@ def send_telegram(text: str):
     url      = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     max_len  = 4000
     chunks   = [text[i:i+max_len] for i in range(0, len(text), max_len)]
-    chat_ids = [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
+    chat_ids = send_to if send_to else [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
 
     for cid in chat_ids:
         for chunk in chunks:
@@ -450,7 +452,7 @@ def send_telegram(text: str):
 
 # ── 6. 메인 실행 ──────────────────────────────────────────────
 
-def run_morning_brief(portfolio_image_path: str = None):
+def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | None = None):
     now = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
     print(f"[{now}] 브리핑 생성 시작...")
 
@@ -505,7 +507,7 @@ def run_morning_brief(portfolio_image_path: str = None):
 
     # ─ 전송
     print("  → 텔레그램 전송 중...")
-    send_telegram(message)
+    send_telegram(message, send_to=send_to)
     print(f"[{now}] 완료!")
 
 

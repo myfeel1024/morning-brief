@@ -102,12 +102,13 @@ def _fmt_row(ticker: str, row: pd.Series) -> str:
     )
 
 
-def _send_telegram(text: str):
+def _send_telegram(text: str, send_to: list[str] | None = None):
     if not TOKEN or not CHAT_IDS:
         return
     url    = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-    for cid in CHAT_IDS:
+    targets = send_to if send_to else CHAT_IDS
+    for cid in targets:
         for chunk in chunks:
             try:
                 requests.post(url, json={"chat_id": cid, "text": chunk}, timeout=10)
@@ -115,7 +116,7 @@ def _send_telegram(text: str):
                 pass
 
 
-def run_us_quant(top_n: int = 10) -> str:
+def run_us_quant(top_n: int = 10, send_to: list[str] | None = None) -> str:
     print("[US Quant] 데이터 다운로드 중...", flush=True)
     raw = yf.download(
         ALL_TICKERS, period="1y", interval="1d",
@@ -185,7 +186,7 @@ def run_us_quant(top_n: int = 10) -> str:
         pass
 
     result = "\n".join(lines)
-    _send_telegram(result)
+    _send_telegram(result, send_to=send_to)
     return result
 
 
