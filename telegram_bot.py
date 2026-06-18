@@ -777,34 +777,6 @@ async def _run_econ_and_notify(context, header: str) -> None:
         except Exception:
             pass
 
-    # ── 경보 즉시 알림 ───────────────────────────────────────────
-    # slowdown_warning: 주가↓ + 동행↓ 동시 발생 → 즉시 별도 푸시
-    if result.get("slowdown_warning"):
-        alert_msg = (
-            "🚨 *[즉시 경보] 성장기→둔화기 전환 신호*\n\n"
-            "주가(S\\&P500) 하락 + 동행지표 하락 전환이 *동시 확인*됐습니다.\n\n"
-            "→ 지금이 핵심 매도 타이밍입니다.\n"
-            "→ 위험자산 즉시 축소, 현금 비중 확보 권고\n\n"
-            "자세한 내용은 위 경기 국면 리포트를 확인하세요."
-        )
-        for cid in AUTHORIZED_CHATS:
-            try:
-                await context.bot.send_message(chat_id=int(cid), text=alert_msg, parse_mode="Markdown")
-            except Exception:
-                pass
-    # growth_to_slowdown: 성장기 내 동행지표 꺾임 조짐 → 별도 주의 알림
-    elif result.get("growth_to_slowdown"):
-        alert_msg = (
-            "⚠️ *[주의 신호] 성장기 내 동행지표 둔화 조짐*\n\n"
-            "아직 국면 전환은 아니지만 동행지표가 꺾이기 시작했습니다.\n\n"
-            "→ 수익 일부 실현 시작\n"
-            "→ 신규 진입 자제, 방망이 짧게 잡기 권고"
-        )
-        for cid in AUTHORIZED_CHATS:
-            try:
-                await context.bot.send_message(chat_id=int(cid), text=alert_msg, parse_mode="Markdown")
-            except Exception:
-                pass
 
 
 async def job_econ_monthly(context) -> None:

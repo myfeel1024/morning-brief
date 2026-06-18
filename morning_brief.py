@@ -528,9 +528,18 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
             phase = cache["phase"]
             lead  = "↑" if cache.get("leading_score", 0) > 0 else "↓"
             coin  = "↑" if cache.get("coincident_score", 0) > 0 else "↓"
-            warn  = " ⚠️ 둔화 경보!" if cache.get("slowdown_warning") else ""
             upd   = cache.get("updated", "")
-            econ_summary = f"📌 경기국면: *{phase}* | 선행{lead} 동행{coin}{warn}  _{upd}_"
+            econ_summary = f"📌 경기국면: *{phase}* | 선행{lead} 동행{coin}  _{upd}_"
+            if cache.get("slowdown_warning"):
+                econ_summary += (
+                    "\n🚨 *[경기 경보] 둔화기 전환 신호 감지*"
+                    "\n주가↓ + 동행지표↓ 동시 확인 — 위험자산 비중 점검 권고"
+                )
+            elif cache.get("growth_to_slowdown"):
+                econ_summary += (
+                    "\n⚠️ *[경기 주의] 둔화기 전환 가능성*"
+                    "\n동행지표 꺾임 조짐 — 아직 확정 아님, 방어적 접근 권고"
+                )
     except Exception:
         pass
 
