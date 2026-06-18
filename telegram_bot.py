@@ -64,7 +64,8 @@ def smart_split(text: str, max_len: int = 1800) -> list[str]:
 async def safe_send(bot_msg, text: str,
                     edit: bool = False,
                     user_msg=None,
-                    context=None) -> None:
+                    context=None,
+                    parse_mode: str = None) -> None:
     """
     분할 + 안전 전송.
     - 첫 청크: bot_msg.edit_text (edit=True) 또는 send_message
@@ -75,6 +76,7 @@ async def safe_send(bot_msg, text: str,
 
     chunks  = smart_split(text)
     chat_id = bot_msg.chat_id
+    pm_kw   = {"parse_mode": parse_mode} if parse_mode else {}
 
     for i, chunk in enumerate(chunks):
         if i > 0:
@@ -82,17 +84,15 @@ async def safe_send(bot_msg, text: str,
 
         try:
             if i == 0 and edit:
-                await bot_msg.edit_text(chunk)
+                await bot_msg.edit_text(chunk, **pm_kw)
             elif context:
-                # context.bot.send_message 가 가장 안정적
-                await context.bot.send_message(chat_id=chat_id, text=chunk)
+                await context.bot.send_message(chat_id=chat_id, text=chunk, **pm_kw)
             else:
-                await bot_msg.reply_text(chunk)
+                await bot_msg.reply_text(chunk, **pm_kw)
         except Exception as e:
             print(f"[safe_send] 청크 {i} 실패 ({len(chunk)}자): {e}")
-            # 최후 수단: bot_msg 에서 reply
             try:
-                await bot_msg.reply_text(chunk)
+                await bot_msg.reply_text(chunk, **pm_kw)
             except Exception as e2:
                 print(f"[safe_send] 청크 {i} 최후 재시도 실패: {e2}")
 
@@ -435,7 +435,7 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"```\n{macro_text}\n```\n\n"
         f"🤖 *AI 분석*\n{reply_text}"
     )
-    await safe_send(msg, full, edit=True, user_msg=update.message, context=context)
+    await safe_send(msg, full, edit=True, user_msg=update.message, context=context, parse_mode="Markdown")
 
 
 # ── 자동 모닝 브리핑 (매일 07:50 KST) ───────────────────────
@@ -1346,7 +1346,7 @@ async def cmd_rebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{result_text}"
             f"{saved_note}"
         )
-        await safe_send(msg, full, edit=True, user_msg=update.message, context=context)
+        await safe_send(msg, full, edit=True, user_msg=update.message, context=context, parse_mode="Markdown")
 
     except Exception as e:
         await msg.edit_text(f"❌ 리밸런싱 오류: {e}")
