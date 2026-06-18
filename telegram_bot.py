@@ -666,11 +666,10 @@ async def cmd_econ(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def job_econ_monthly(context) -> None:
-    """매월 말일 오전 8시 KST 자동 경기 국면 브리핑."""
-    import calendar
+    """매월 25일 오전 8시 KST 자동 경기 국면 브리핑.
+    미국 주요 지표는 매월 21~25일 사이 업데이트되므로 25일 기준."""
     today = datetime.now(KST)
-    last_day = calendar.monthrange(today.year, today.month)[1]
-    if today.day != last_day:
+    if today.day != 25:
         return
     try:
         loop   = asyncio.get_event_loop()
