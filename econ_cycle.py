@@ -3,7 +3,9 @@
 선행/동행/후행 지표 → 회복/성장/둔화/침체 국면 평가
 
 출처: NH투자증권 백창규 센터장 프레임워크 기반
-데이터: FRED CSV (무료, API 키 불필요) + yfinance
+데이터: FRED API (공식, 무료 API 키 필요) + yfinance
+
+환경변수: FRED_API_KEY (https://fred.stlouisfed.org/docs/api/api_key.html 무료 발급)
 
 국면 기준:
   회복기 — 선행↑, 동행↓(바닥), 후행↓  → 주도: 대형 성장주(M7), IT·반도체, 미국 선진국
@@ -14,20 +16,21 @@
 모니터링 주기: 매월 21~25일 (미국 주요 지표 발표 시점)
 """
 
+import os
 import requests
 import pandas as pd
 import yfinance as yf
-from io import StringIO
 from datetime import datetime
 
-_FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={}"
-_HEADERS   = {"User-Agent": "Mozilla/5.0"}
+# ── FRED API 설정 ─────────────────────────────────────────────
+_FRED_API_KEY  = os.getenv("FRED_API_KEY", "")
+_FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
 # ── FRED 시리즈 ID ───────────────────────────────────────────
 # 선행지표
 _ID_PMI     = "NAPM"            # ISM 제조업 PMI (월)
 _ID_CSENT   = "UMCSENT"         # 미시간대 소비자심리지수 (월)
-_ID_SPREAD  = "T10Y2Y"          # 장단기 금리차 10Y-2Y (일→월평균 필요)
+_ID_SPREAD  = "T10Y2Y"          # 장단기 금리차 10Y-2Y (일별)
 # 동행지표
 _ID_INDPRO  = "INDPRO"          # 산업생산지수 (월)
 _ID_RETAIL  = "RSAFS"           # 소매판매 (월, 백만달러)
@@ -38,15 +41,27 @@ _ID_UNEMP   = "UNRATE"          # 실업률 (월)
 _ID_WAGE    = "CES0500000003"   # 시간당 평균임금 (월, 달러)
 
 
-def _fetch_fred(series_id: str, n: int = 12) -> pd.Series:
-    """FRED CSV 다운로드 후 최근 n개 반환."""
-    url = _FRED_BASE.format(series_id)
-    r   = requests.get(url, timeout=40, headers=_HEADERS)
+def _fetch_fred(series_id: str, n: int = 24) -> pd.Series:
+    """FRED 공식 API로 시계열 조회 후 최근 n개 반환."""
+    if not _FRED_API_KEY:
+        raise ValueError("FRED_API_KEY 환경변수가 설정되지 않았습니다.")
+    params = {
+        "series_id":   series_id,
+        "api_key":     _FRED_API_KEY,
+        "file_type":   "json",
+        "sort_order":  "asc",
+        "limit":       n * 3,   # 결측치 포함 여유분
+    }
+    r = requests.get(_FRED_API_BASE, params=params, timeout=30)
     r.raise_for_status()
-    df  = pd.read_csv(StringIO(r.text), parse_dates=["DATE"], index_col="DATE")
-    df  = df.replace(".", float("nan"))
-    df.iloc[:, 0] = pd.to_numeric(df.iloc[:, 0], errors="coerce")
-    return df.iloc[:, 0].dropna().tail(n)
+    obs = r.json().get("observations", [])
+    dates, values = [], []
+    for o in obs:
+        if o["value"] != ".":
+            dates.append(o["date"])
+            values.append(float(o["value"]))
+    s = pd.Series(values, index=pd.to_datetime(dates))
+    return s.tail(n)
 
 
 def _fetch_fred_monthly_avg(series_id: str, n: int = 12) -> pd.Series:
