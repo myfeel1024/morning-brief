@@ -481,7 +481,6 @@ async def cmd_brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop.run_in_executor(None, lambda: mod.run_morning_brief(send_to=[requester])),
             timeout=180,
         )
-        await update.message.reply_text("✅ 브리핑 전송 완료!")
     except asyncio.TimeoutError:
         await update.message.reply_text("❌ 브리핑 생성 시간 초과 (3분). 잠시 후 다시 시도해주세요.")
     except Exception as e:

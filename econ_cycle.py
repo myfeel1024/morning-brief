@@ -489,27 +489,41 @@ def format_econ_report(result: dict) -> str:
 # ── 캐시 & 국면 상태 유틸 ────────────────────────────────────
 
 def save_econ_cache(result: dict) -> None:
-    """마지막 경기 분석 요약을 캐시 (모닝 브리핑·국면 전환 판단용)."""
+    """마지막 경기 분석 요약을 로컬 + GitHub에 캐시."""
     cache = {
-        "phase":             result["phase"],
-        "leading_score":     result["leading_score"],
-        "coincident_score":  result["coincident_score"],
-        "lagging_score":     result["lagging_score"],
-        "slowdown_warning":  result.get("slowdown_warning", False),
+        "phase":              result["phase"],
+        "leading_score":      result["leading_score"],
+        "coincident_score":   result["coincident_score"],
+        "lagging_score":      result["lagging_score"],
+        "slowdown_warning":   result.get("slowdown_warning", False),
         "growth_to_slowdown": result.get("growth_to_slowdown", False),
-        "updated":           datetime.now().strftime("%Y-%m-%d"),
+        "updated":            datetime.now().strftime("%Y-%m-%d"),
     }
     try:
         _CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         print(f"[econ] 캐시 저장 실패: {e}")
+    try:
+        from gist_store import save_json
+        save_json("econ_cache.json", cache)
+    except Exception:
+        pass
 
 
 def load_econ_cache() -> dict:
-    """캐시된 경기 분석 요약 로드. 없으면 빈 dict."""
+    """캐시된 경기 분석 요약 로드. 로컬 없으면 GitHub에서 복구."""
     try:
         if _CACHE_FILE.exists():
             return json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    try:
+        from gist_store import load_json
+        data = load_json("econ_cache.json")
+        if data and isinstance(data, dict):
+            _CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            print("[econ] econ_cache GitHub에서 복구 완료")
+            return data
     except Exception:
         pass
     return {}
