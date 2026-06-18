@@ -516,10 +516,20 @@ def load_econ_cache() -> dict:
 
 
 def load_last_phase() -> str:
-    """이전 국면 로드. 없으면 빈 문자열."""
+    """이전 국면 로드. 로컬 없으면 GitHub에서 복구. 없으면 빈 문자열."""
     try:
         if _PHASE_FILE.exists():
             data = json.loads(_PHASE_FILE.read_text(encoding="utf-8"))
+            return data.get("phase", "")
+    except Exception:
+        pass
+    # 로컬 없음 → GitHub 복구 (재배포 직후)
+    try:
+        from gist_store import load_json
+        data = load_json("phase_state.json")
+        if data and isinstance(data, dict):
+            _PHASE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            print("[econ] phase_state GitHub에서 복구 완료")
             return data.get("phase", "")
     except Exception:
         pass
@@ -527,12 +537,15 @@ def load_last_phase() -> str:
 
 
 def save_last_phase(phase: str) -> None:
-    """현재 국면을 파일에 저장 (전환 감지용)."""
+    """현재 국면을 로컬 파일 + GitHub에 저장 (전환 감지용)."""
+    data = {"phase": phase, "updated": datetime.now().strftime("%Y-%m-%d")}
     try:
-        _PHASE_FILE.write_text(
-            json.dumps({"phase": phase, "updated": datetime.now().strftime("%Y-%m-%d")},
-                       ensure_ascii=False),
-            encoding="utf-8",
-        )
+        _PHASE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         print(f"[econ] 국면 상태 저장 실패: {e}")
+    # GitHub 백업 (재배포 내구성)
+    try:
+        from gist_store import save_json
+        save_json("phase_state.json", data)
+    except Exception:
+        pass
