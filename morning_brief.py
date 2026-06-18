@@ -531,24 +531,21 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
     try:
         from econ_cycle import load_econ_cache
         cache = load_econ_cache()
+        print(f"[morning_brief] econ_cache 로드: {cache}", flush=True)
         if cache:
             phase = cache["phase"]
             lead  = "↑" if cache.get("leading_score", 0) > 0 else "↓"
             coin  = "↑" if cache.get("coincident_score", 0) > 0 else "↓"
             upd   = cache.get("updated", "")
-            econ_summary = f"📌 경기국면: *{phase}* | 선행{lead} 동행{coin}  _{upd}_"
+            econ_summary = f"📌 경기국면: {phase} | 선행{lead} 동행{coin}  ({upd})"
             if cache.get("slowdown_warning"):
-                econ_summary += (
-                    "\n🚨 *[경기 경보] 둔화기 전환 신호 감지*"
-                    "\n주가↓ + 동행지표↓ 동시 확인 — 위험자산 비중 점검 권고"
-                )
+                econ_summary += "\n🚨 [경기 경보] 둔화기 전환 신호 감지 — 위험자산 비중 점검 권고"
             elif cache.get("growth_to_slowdown"):
-                econ_summary += (
-                    "\n⚠️ *[경기 주의] 둔화기 전환 가능성*"
-                    "\n동행지표 꺾임 조짐 — 아직 확정 아님, 방어적 접근 권고"
-                )
-    except Exception:
-        pass
+                econ_summary += "\n⚠️ [경기 주의] 둔화기 전환 가능성 — 방어적 접근 권고"
+        else:
+            print("[morning_brief] econ_cache 비어있음 — /econ 먼저 실행 필요", flush=True)
+    except Exception as e:
+        print(f"[morning_brief] econ_cache 로드 실패: {e}", flush=True)
 
     # ─ 최종 메시지 조합
     separator = "\n" + "─" * 28 + "\n"
