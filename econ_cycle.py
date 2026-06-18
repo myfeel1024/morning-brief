@@ -28,7 +28,7 @@ _FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
 # ── FRED 시리즈 ID ───────────────────────────────────────────
 # 선행지표
-_ID_PMI     = "PHIMFGINDX"      # 필라델피아 연준 제조업지수 (월)
+_ID_PMI     = "GACDFSA066MSFRBPHI"  # 필라델피아 연준 제조업 현황 일반활동 확산지수 (월, SA)
 _ID_CSENT   = "UMCSENT"         # 미시간대 소비자심리지수 (월)
 _ID_SPREAD  = "T10Y2Y"          # 장단기 금리차 10Y-2Y (일별)
 # 동행지표
