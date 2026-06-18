@@ -43,7 +43,7 @@ _ID_WAGE    = "CES0500000003"   # 시간당 평균임금 (월, 달러)
 _ID_HOURS   = "AWHAETP"         # 주당 평균 근로시간 (월, 전체 민간부문)
 
 # ── 국면별 추천 섹터·종목 ─────────────────────────────────────
-_PHASE_TICKERS: dict[str, list[tuple[str, str, list[str]]]] = {
+_PHASE_TICKERS = {
     "회복기": [
         ("🖥️", "IT·S/W",     ["MSFT", "CRM", "NOW", "ADBE"]),
         ("🔬", "반도체",      ["NVDA", "AMD", "AVGO", "TSM"]),
