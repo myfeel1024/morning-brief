@@ -42,6 +42,36 @@ _ID_UNEMP   = "UNRATE"          # 실업률 (월)
 _ID_WAGE    = "CES0500000003"   # 시간당 평균임금 (월, 달러)
 _ID_HOURS   = "AWHAETP"         # 주당 평균 근로시간 (월, 전체 민간부문)
 
+# ── 국면별 추천 섹터·종목 ─────────────────────────────────────
+_PHASE_TICKERS: dict[str, list[tuple[str, str, list[str]]]] = {
+    "회복기": [
+        ("🖥️", "IT·S/W",     ["MSFT", "CRM", "NOW", "ADBE"]),
+        ("🔬", "반도체",      ["NVDA", "AMD", "AVGO", "TSM"]),
+        ("💬", "커뮤니케이션", ["META", "GOOGL", "NFLX"]),
+        ("🛍️", "자유소비재",  ["AMZN", "TSLA", "NKE"]),
+        ("✈️", "운송",        ["UPS", "FDX", "DAL"]),
+    ],
+    "성장기": [
+        ("🏦", "금융",             ["JPM", "GS", "MS", "BAC"]),
+        ("🏗️", "산업재",          ["CAT", "DE", "GE", "HON"]),
+        ("💊", "헬스케어(바이오·기기)", ["LLY", "MRNA", "ABT", "SYK"]),
+        ("⚡", "에너지·소재",      ["XOM", "CVX", "LIN", "FCX"]),
+        ("🏢", "리츠",             ["PLD", "O", "SPG"]),
+        ("🎬", "미디어·엔터",      ["DIS", "SPOT", "PARA"]),
+    ],
+    "둔화기": [
+        ("📡", "통신",        ["VZ", "T", "TMUS"]),
+        ("💉", "헬스케어(제약)", ["JNJ", "PFE", "MRK", "ABBV"]),
+        ("🛒", "필수소비재",  ["PG", "KO", "WMT", "CL"]),
+        ("💡", "유틸리티",    ["NEE", "DUK", "SO"]),
+    ],
+    "침체기": [
+        ("🏰", "메가캡",   ["AAPL", "MSFT", "GOOGL", "AMZN", "BRK-B"]),
+        ("💡", "유틸리티", ["NEE", "DUK", "SO", "AEP"]),
+        ("📡", "통신",     ["VZ", "T", "TMUS"]),
+    ],
+}
+
 
 def _fetch_fred(series_id: str, n: int = 24) -> pd.Series:
     """FRED 공식 API로 시계열 조회 후 최근 n개 반환."""
@@ -404,6 +434,15 @@ def format_econ_report(result: dict) -> str:
         "",
         "━━━ 💡 자산배분 조언 ━━━",
         result["asset_advice"],
+        "",
+        "━━━ 📋 추천 섹터·종목 ━━━",
+    ]
+
+    phase = result["phase"]
+    for emoji, sector, tickers in _PHASE_TICKERS.get(phase, []):
+        lines.append(f"  {emoji} {sector}: {', '.join(tickers)}")
+
+    lines += [
         "",
         "📅 _매월 28일 자동 브리핑 | 출처: FRED + yfinance_",
     ]
