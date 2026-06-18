@@ -492,11 +492,11 @@ def save_econ_cache(result: dict) -> None:
     """마지막 경기 분석 요약을 로컬 + GitHub에 캐시."""
     cache = {
         "phase":              result["phase"],
-        "leading_score":      result["leading_score"],
-        "coincident_score":   result["coincident_score"],
-        "lagging_score":      result["lagging_score"],
-        "slowdown_warning":   result.get("slowdown_warning", False),
-        "growth_to_slowdown": result.get("growth_to_slowdown", False),
+        "leading_score":      float(result["leading_score"]),
+        "coincident_score":   float(result["coincident_score"]),
+        "lagging_score":      float(result["lagging_score"]),
+        "slowdown_warning":   bool(result.get("slowdown_warning", False)),
+        "growth_to_slowdown": bool(result.get("growth_to_slowdown", False)),
         "updated":            datetime.now().strftime("%Y-%m-%d"),
     }
     try:
