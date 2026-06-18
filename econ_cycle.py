@@ -28,9 +28,10 @@ _FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
 # ── FRED 시리즈 ID ───────────────────────────────────────────
 # 선행지표
-_ID_PMI     = "NAPM"            # ISM 제조업 PMI (월)
-_ID_CSENT   = "UMCSENT"         # 미시간대 소비자심리지수 (월)
-_ID_SPREAD  = "T10Y2Y"          # 장단기 금리차 10Y-2Y (일별)
+_ID_PMI     = "USALOLITONOSTSAM" # OECD 경기선행지수 USA (PMI 대체, 월)
+                                  # NAPM(ISM PMI)은 FRED에서 2001년 이후 중단됨
+_ID_CSENT   = "UMCSENT"          # 미시간대 소비자심리지수 (월)
+_ID_SPREAD  = "T10Y2Y"           # 장단기 금리차 10Y-2Y (일별)
 # 동행지표
 _ID_INDPRO  = "INDPRO"          # 산업생산지수 (월)
 _ID_RETAIL  = "RSAFS"           # 소매판매 (월, 백만달러)
@@ -46,11 +47,11 @@ def _fetch_fred(series_id: str, n: int = 24) -> pd.Series:
     if not _FRED_API_KEY:
         raise ValueError("FRED_API_KEY 환경변수가 설정되지 않았습니다.")
     params = {
-        "series_id":   series_id,
-        "api_key":     _FRED_API_KEY,
-        "file_type":   "json",
-        "sort_order":  "asc",
-        "limit":       n * 3,   # 결측치 포함 여유분
+        "series_id":  series_id,
+        "api_key":    _FRED_API_KEY,
+        "file_type":  "json",
+        "sort_order": "desc",   # 최신 데이터부터 내림차순
+        "limit":      n * 2,    # 결측치 여유분 포함
     }
     r = requests.get(_FRED_API_BASE, params=params, timeout=30)
     r.raise_for_status()
@@ -60,7 +61,8 @@ def _fetch_fred(series_id: str, n: int = 24) -> pd.Series:
         if o["value"] != ".":
             dates.append(o["date"])
             values.append(float(o["value"]))
-    s = pd.Series(values, index=pd.to_datetime(dates))
+    # 내림차순으로 받았으므로 역순 정렬해서 시계열 복원
+    s = pd.Series(list(reversed(values)), index=pd.to_datetime(list(reversed(dates))))
     return s.tail(n)
 
 
@@ -148,10 +150,10 @@ def get_econ_cycle() -> dict:
 
     try:
         pmi = _fetch_fred(_ID_PMI, 12)
-        ind["pmi"] = {"name": "ISM PMI", "series": pmi, "trend": _trend(pmi)}
+        ind["pmi"] = {"name": "OECD 경기선행지수", "series": pmi, "trend": _trend(pmi)}
     except Exception as e:
-        errors.append(f"ISM PMI: {e}")
-        ind["pmi"] = {"name": "ISM PMI", "series": pd.Series(dtype=float), "trend": 0.0}
+        errors.append(f"OECD 경기선행지수: {e}")
+        ind["pmi"] = {"name": "OECD 경기선행지수", "series": pd.Series(dtype=float), "trend": 0.0}
 
     try:
         cs = _fetch_fred(_ID_CSENT, 12)
@@ -356,7 +358,7 @@ def format_econ_report(result: dict) -> str:
         "",
         "━━━ 🔮 선행지표 (미래 선행) ━━━",
         f"  📈 S\\&P500              {val('sp500', '.0f')}  {tl('sp500')}",
-        f"  🏭 ISM PMI              {val('pmi')}  {tl('pmi')}",
+        f"  📊 OECD 선행지수         {val('pmi', '.2f')}  {tl('pmi')}",
         f"  😊 소비자심리지수       {val('csent')}  {tl('csent')}",
         f"  📐 장단기 금리차(%)     {val('spread', '.2f')}  {tl('spread')}",
         f"  → 선행 종합: *{_trend_label(result['leading_score'])}*",
@@ -376,7 +378,8 @@ def format_econ_report(result: dict) -> str:
         "━━━ 국면 적합도 ━━━",
     ]
 
-    for ph, sc in sorted(result["phase_scores"].items(), key=lambda x: -x[1]):
+    for ph in ["회복기", "성장기", "둔화기", "침체기"]:
+        sc     = result["phase_scores"][ph]
         marker = " ◀ 현재" if ph == result["phase"] else ""
         lines.append(f"  {ph}: {sc:+.1f}{marker}")
 
