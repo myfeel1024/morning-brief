@@ -672,7 +672,7 @@ async def job_check_alerts(context) -> None:
 # ── 경기 국면 분석 ────────────────────────────────────────────
 
 def _get_phase_quant_picks(phase: str) -> str:
-    """경기 국면 추천 티커에 퀀트 점수 적용 → 포맷 문자열 반환."""
+    """경기 국면 추천 티커 중 BUY 신호만 퀀트 점수 적용 → 포맷 문자열 반환."""
     try:
         from econ_cycle import _PHASE_TICKERS
         from quant_us import score_tickers_quick
@@ -691,13 +691,17 @@ def _get_phase_quant_picks(phase: str) -> str:
         if not scored:
             return ""
 
-        lines = [f"📊 *{phase} 추천 종목 퀀트 점수*\n"]
-        for item in scored[:12]:
+        buy_items = [item for item in scored if item["signal"] == "🟢BUY"]
+        if not buy_items:
+            return ""
+
+        lines = [f"\n―――――― 🟢 BUY 추천 종목 ――――――"]
+        for item in buy_items:
             t   = item["ticker"]
             sec = ticker_to_sector.get(t, "")
             m3  = f"{item['mom3m']*100:+.1f}%" if item["mom3m"] is not None else " N/A "
             lines.append(
-                f"{item['signal']} {t:<6} {sec:<18} "
+                f"🟢BUY {t:<6} {sec:<18} "
                 f"점수:{item['score']:.2f}  3M:{m3}  RSI:{item['rsi']:.0f}"
             )
         return "\n".join(lines)
@@ -731,18 +735,12 @@ async def cmd_econ(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 + report
             )
 
-        await msg.edit_text(report, parse_mode="Markdown")
+        # 퀀트 계산 중임을 먼저 표시
+        await msg.edit_text(report + "\n\n⏳ BUY 종목 퀀트 점수 계산 중...", parse_mode="Markdown")
 
-        # ── 퀀트 점수 follow-up ──────────────────────────────
-        q_msg = await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="⏳ 추천 종목 퀀트 점수 계산 중...",
-        )
         picks = await loop.run_in_executor(None, lambda: _get_phase_quant_picks(current_phase))
-        if picks:
-            await q_msg.edit_text(picks, parse_mode="Markdown")
-        else:
-            await q_msg.delete()
+        full  = report + (picks if picks else "")
+        await msg.edit_text(full, parse_mode="Markdown")
 
     except Exception as e:
         await msg.edit_text(f"❌ 경기지표 조회 실패: {e}")
@@ -765,7 +763,8 @@ async def _run_econ_and_notify(context, header: str) -> None:
             + report
         )
 
-    full = f"{header}\n\n{report}"
+    picks = await loop.run_in_executor(None, lambda: _get_phase_quant_picks(current_phase))
+    full  = f"{header}\n\n{report}" + (picks if picks else "")
     for cid in AUTHORIZED_CHATS:
         try:
             for chunk in smart_split(full):
