@@ -28,10 +28,10 @@ _FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
 # ── FRED 시리즈 ID ───────────────────────────────────────────
 # 선행지표
-_ID_PMI     = "USALOLITONOSTSAM" # OECD 경기선행지수 USA (PMI 대체, 월)
-                                  # NAPM(ISM PMI)은 FRED에서 2001년 이후 중단됨
-_ID_CSENT   = "UMCSENT"          # 미시간대 소비자심리지수 (월)
-_ID_SPREAD  = "T10Y2Y"           # 장단기 금리차 10Y-2Y (일별)
+_ID_PMI     = "PHIMFGINDX"      # 필라델피아 연준 제조업지수 (ISM PMI 대체, 월)
+                                  # ISM PMI는 FRED 무료 미제공 → 방향성 동일한 필라델피아 지수 사용
+_ID_CSENT   = "UMCSENT"         # 미시간대 소비자심리지수 (월)
+_ID_SPREAD  = "T10Y2Y"          # 장단기 금리차 10Y-2Y (일별)
 # 동행지표
 _ID_INDPRO  = "INDPRO"          # 산업생산지수 (월)
 _ID_RETAIL  = "RSAFS"           # 소매판매 (월, 백만달러)
@@ -40,6 +40,8 @@ _ID_CAPU    = "TCU"             # 설비 가동률 (월, %)
 _ID_GDP     = "A191RL1Q225SBEA" # 실질GDP 성장률 % SAAR (분기)
 _ID_UNEMP   = "UNRATE"          # 실업률 (월)
 _ID_WAGE    = "CES0500000003"   # 시간당 평균임금 (월, 달러)
+# 물가지표 (인플레이션 압력 — 상 계산 미포함, 표시 전용)
+_ID_PPI     = "PPIFIS"          # 생산자물가지수 PPI: Final Demand (월)
 
 
 def _fetch_fred(series_id: str, n: int = 24) -> pd.Series:
@@ -150,10 +152,10 @@ def get_econ_cycle() -> dict:
 
     try:
         pmi = _fetch_fred(_ID_PMI, 12)
-        ind["pmi"] = {"name": "OECD 경기선행지수", "series": pmi, "trend": _trend(pmi)}
+        ind["pmi"] = {"name": "필라델피아 PMI", "series": pmi, "trend": _trend(pmi)}
     except Exception as e:
-        errors.append(f"OECD 경기선행지수: {e}")
-        ind["pmi"] = {"name": "OECD 경기선행지수", "series": pd.Series(dtype=float), "trend": 0.0}
+        errors.append(f"PMI: {e}")
+        ind["pmi"] = {"name": "필라델피아 PMI", "series": pd.Series(dtype=float), "trend": 0.0}
 
     try:
         cs = _fetch_fred(_ID_CSENT, 12)
@@ -214,6 +216,14 @@ def get_econ_cycle() -> dict:
     except Exception as e:
         errors.append(f"임금: {e}")
         ind["wage"] = {"name": "시간당 평균임금($)", "series": pd.Series(dtype=float), "trend": 0.0}
+
+    # ── 물가지표 (표시 전용, 국면 점수 미반영) ───────────────────
+    try:
+        ppi = _fetch_fred(_ID_PPI, 12)
+        ind["ppi"] = {"name": "생산자물가지수(PPI)", "series": ppi, "trend": _trend(ppi)}
+    except Exception as e:
+        errors.append(f"PPI: {e}")
+        ind["ppi"] = {"name": "생산자물가지수(PPI)", "series": pd.Series(dtype=float), "trend": 0.0}
 
     # ── 그룹 종합 점수 ────────────────────────────────────────
     # 선행 4개 평균 (sp500, pmi, csent, spread)
@@ -358,7 +368,7 @@ def format_econ_report(result: dict) -> str:
         "",
         "━━━ 🔮 선행지표 (미래 선행) ━━━",
         f"  📈 S\\&P500              {val('sp500', '.0f')}  {tl('sp500')}",
-        f"  📊 OECD 선행지수         {val('pmi', '.2f')}  {tl('pmi')}",
+        f"  🏭 필라델피아 PMI        {val('pmi', '.1f')}  {tl('pmi')}",
         f"  😊 소비자심리지수       {val('csent')}  {tl('csent')}",
         f"  📐 장단기 금리차(%)     {val('spread', '.2f')}  {tl('spread')}",
         f"  → 선행 종합: *{_trend_label(result['leading_score'])}*",
@@ -374,6 +384,10 @@ def format_econ_report(result: dict) -> str:
         f"  👷 실업률(%)            {val('unemp')}  {unemp_raw}",
         f"  💵 시간당 임금($)       {val('wage')}  {tl('wage')}",
         f"  → 후행 종합: *{_trend_label(result['lagging_score'])}*",
+        "",
+        "━━━ 💹 물가지표 (인플레이션 압력) ━━━",
+        f"  📦 생산자물가(PPI)       {val('ppi', '.1f')}  {tl('ppi')}",
+        f"  ℹ️ PPI↑=물가 상승 압력 / PPI↓=디플레 압력 (국면 판정 미포함)",
         "",
         "━━━ 국면 적합도 ━━━",
     ]
