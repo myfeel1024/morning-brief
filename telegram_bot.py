@@ -669,7 +669,7 @@ async def job_econ_monthly(context) -> None:
     """매월 25일 오전 8시 KST 자동 경기 국면 브리핑.
     미국 주요 지표는 매월 21~25일 사이 업데이트되므로 25일 기준."""
     today = datetime.now(KST)
-    if today.day != 25:
+    if today.day != 28:
         return
     try:
         loop   = asyncio.get_event_loop()

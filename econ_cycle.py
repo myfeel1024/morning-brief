@@ -318,7 +318,7 @@ def format_econ_report(result: dict) -> str:
         "━━━ 💡 자산배분 조언 ━━━",
         result["asset_advice"],
         "",
-        "📅 _매월 25일 자동 브리핑 | 출처: FRED + yfinance_",
+        "📅 _매월 28일 자동 브리핑 | 출처: FRED + yfinance_",
     ]
 
     if result["errors"]:
