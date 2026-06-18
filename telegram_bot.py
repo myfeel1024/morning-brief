@@ -33,6 +33,7 @@ from telegram.ext import (
     filters, ContextTypes,
 )
 from stock_research import research_stock, fetch_korean_news
+from econ_cycle import get_econ_cycle, format_econ_report
 
 
 # ── 메시지 분할 & 안전 전송 헬퍼 ────────────────────────────────
@@ -358,10 +359,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  예) /alert AAPL 200\n"
         "  예) /alert list\n"
         "  예) /alert cancel 1\n"
+        "/econ         — 미국 경기 국면 분석\n"
+        "  (선행·동행·후행지표 → 회복/성장/둔화/침체 판단)\n"
+        "  매월 말일 08:00 자동 브리핑\n"
         "/help         — 도움말\n\n"
         "💬 *대화체도 됩니다:*\n"
         "• 한국 퀀트 알려줘\n"
         "• 미국 퀀트 알려줘\n"
+        "• 경기지표 알려줘\n"
         "• 삼성전자 7만원 넘으면 알려줘",
         parse_mode="Markdown",
     )
@@ -642,6 +647,48 @@ async def job_check_alerts(context) -> None:
         alerts[chat_id] = remaining
     if changed:
         _save_alerts(alerts)
+
+
+# ── 경기 국면 분석 ────────────────────────────────────────────
+
+async def cmd_econ(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """미국 경기 국면 분석 — /econ 또는 '경기지표 알려줘'"""
+    if not is_authorized(update):
+        return
+    msg = await update.message.reply_text("📊 경기지표 수집 중... (30초 내외 소요)")
+    try:
+        loop   = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, get_econ_cycle)
+        report = format_econ_report(result)
+        await msg.edit_text(report, parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ 경기지표 조회 실패: {e}")
+
+
+async def job_econ_monthly(context) -> None:
+    """매월 말일 오전 8시 KST 자동 경기 국면 브리핑."""
+    import calendar
+    today = datetime.now(KST)
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    if today.day != last_day:
+        return
+    try:
+        loop   = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, get_econ_cycle)
+        report = f"📅 *월말 경기 국면 자동 브리핑*\n\n" + format_econ_report(result)
+        for cid in AUTHORIZED_CHATS:
+            try:
+                await context.bot.send_message(
+                    chat_id=int(cid), text=report, parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        for cid in AUTHORIZED_CHATS:
+            try:
+                await context.bot.send_message(chat_id=int(cid), text=f"⚠️ 월말 경기 브리핑 실패: {e}")
+            except Exception:
+                pass
 
 
 # ── 사진 메시지 처리 ──────────────────────────────────────────
@@ -982,6 +1029,11 @@ _US_QUANT_TRIGGERS = [
     "미국 퀀트", "미국퀀트", "나스닥 퀀트", "나스닥퀀트",
     "us 퀀트", "us퀀트", "미국 주식 퀀트", "미국주식퀀트",
 ]
+_ECON_TRIGGERS = [
+    "경기지표", "경기 지표", "경기국면", "경기 국면",
+    "경기분석", "경기 분석", "경기사이클", "경기 사이클",
+    "경기 알려줘", "경기알려줘", "경제지표", "경제 지표",
+]
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -990,6 +1042,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     question = update.message.text.strip()
     chat_id  = update.effective_chat.id
+
+    # ── 경기 국면 감지 ──
+    if any(t in question for t in _ECON_TRIGGERS):
+        await cmd_econ(update, context)
+        return
 
     # ── 퀀트 대화체 감지 ──
     q_lower = question.lower()
@@ -1264,6 +1321,7 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("quant",     cmd_quant))
     app.add_handler(CommandHandler("quant_us",  cmd_quant_us))
     app.add_handler(CommandHandler("alert",     cmd_alert))
+    app.add_handler(CommandHandler("econ",      cmd_econ))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.job_queue.run_daily(
@@ -1276,6 +1334,11 @@ def _build_app() -> Application:
         interval=300,   # 5분마다
         first=60,
         name="price_alert_check",
+    )
+    app.job_queue.run_daily(
+        job_econ_monthly,
+        time=dtime(hour=8, minute=0, second=0, tzinfo=KST),
+        name="econ_monthly_brief",
     )
     return app
 
