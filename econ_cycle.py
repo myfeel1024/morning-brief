@@ -222,43 +222,61 @@ def get_econ_cycle() -> dict:
     }
     phase = max(phase_scores, key=phase_scores.get)
 
+    # ── 둔화 전환 경보 감지 ───────────────────────────────────
+    # 주가 조정(S&P500 하락) + 동행지표 하락 전환 → 핵심 위험 신호
+    sp500_falling      = ind["sp500"]["trend"] < -_THR_UP
+    coincident_turning = coincident_score < -_THR_UP
+    slowdown_warning   = sp500_falling and coincident_turning
+
+    # 성장기에서 동행지표가 꺾이기 시작하는 조기 경보
+    growth_to_slowdown = (phase == "성장기" and coincident_score < 0)
+
     # ── 국면별 상세 조언 ──────────────────────────────────────
+    # 현대 경제 맥락: 정부·연준의 적극 개입(양적완화, 금리 인하)으로
+    # 완전한 침체보다 "둔화 → 회복" 사이클이 반복되는 경향
+    # 지역 강세: 성장기만 신흥국 강세 / 나머지 3개 국면은 미국 주식 우위
     advice_map = {
         "회복기": (
             "📈 *회복기* — 위험자산 비중 점진적 확대\n"
-            "• 주도 스타일: 대형 성장주(M7), IT 소프트웨어, 반도체\n"
-            "• 주도 지역: 미국·선진국 자산 중심\n"
-            "• 금리 인하 시그널 포착 시 적극 매수 타이밍"
+            "• 주도 섹터: 대형 성장주(M7), IT·소프트웨어, 반도체\n"
+            "• 주도 지역: *미국·선진국* 중심 (신흥국 대비 미국 우위)\n"
+            "• 연준 금리 인하 시그널 포착 시 적극 매수 타이밍\n"
+            "• 현대 사이클: 정부·연준 개입으로 침체 없이 이 단계로 복귀하는 경향"
         ),
         "성장기": (
             "🚀 *성장기* — 위험자산 최대 활용\n"
-            "• 주도 스타일: 시클리컬(소재·에너지·산업재), 원자재\n"
-            "• 주도 지역: 신흥국(한국·중국) 및 글로벌 교역 수혜 국가\n"
-            "• 글로벌 주문 증가 → 수출 중심 종목 비중 확대"
+            "• 주도 섹터: 시클리컬(소재·에너지·산업재), 원자재\n"
+            "• 주도 지역: *신흥국(한국·중국)* 강세 — 유일하게 EM이 미국을 outperform\n"
+            "• 글로벌 주문 증가 → 수출 중심 종목·ETF 비중 확대"
         ),
         "둔화기": (
             "⚠️ *둔화기* — 위험자산 비중 단계적 축소\n"
-            "• 주도 스타일: 방어주 (통신·제약·바이오·유틸리티·필수소비재)\n"
-            "• 미국 다우지수 종목 상대적 방어력 보유\n"
-            "• 채권 비중 확대 시작, 방망이 짧게 잡기"
+            "• 주도 섹터: 방어주 (통신·제약·바이오·유틸리티·필수소비재)\n"
+            "• 주도 지역: *미국* 우위 (신흥국 약세, 달러 강세 경향)\n"
+            "• 미국 다우 방어력 활용, 채권 비중 확대, 방망이 짧게\n"
+            "• 현대 사이클: 연준이 선제 금리 인하로 침체 전 회복 유도 가능성 주시"
         ),
         "침체기": (
             "🛡️ *침체기* — 안전자산 위주 보유\n"
-            "• 주도 자산: 달러·미국 국채·현금성 자산\n"
-            "• 주도 종목: 메가캡(부채 낮고 현금흐름 우수한 초대형주)\n"
-            "• 저가 분할매수 준비 단계 (회복기 대비)"
+            "• 주도 자산: 달러·미국 국채·현금\n"
+            "• 주도 종목: *미국 메가캡* (부채 낮고 현금흐름 우수한 초대형주)\n"
+            "• 주도 지역: *미국* 절대 우위 (신흥국 회피)\n"
+            "• 현대 사이클: 연준·정부의 대규모 유동성 공급으로 침체 기간 단축\n"
+            "  → 저가 분할매수 준비, 회복 전환 신호(선행지표↑) 포착에 집중"
         ),
     }
 
     return {
-        "phase":            phase,
-        "phase_scores":     phase_scores,
-        "leading_score":    leading_score,
-        "coincident_score": coincident_score,
-        "lagging_score":    lagging_score,
-        "indicators":       ind,
-        "asset_advice":     advice_map[phase],
-        "errors":           errors,
+        "phase":             phase,
+        "phase_scores":      phase_scores,
+        "leading_score":     leading_score,
+        "coincident_score":  coincident_score,
+        "lagging_score":     lagging_score,
+        "indicators":        ind,
+        "asset_advice":      advice_map[phase],
+        "slowdown_warning":  slowdown_warning,
+        "growth_to_slowdown": growth_to_slowdown,
+        "errors":            errors,
     }
 
 
@@ -282,9 +300,28 @@ def format_econ_report(result: dict) -> str:
     # 실업률·임금: trend는 이미 역행/일반 처리됨, 표시는 원래 방향
     unemp_raw = _trend_label(-ind["unemp"]["trend"])
 
+    # ── 경보 배너 ─────────────────────────────────────────────
+    warning_lines = []
+    if result.get("slowdown_warning"):
+        warning_lines += [
+            "🚨 *[경보] 둔화 전환 신호 감지*",
+            "주가 조정 + 동행지표 하락 전환이 동시 확인됐습니다.",
+            "→ *위험자산 비중 즉시 축소, 현금 비중 확대* 권고",
+            "→ 성장기→둔화기 전환의 핵심 신호입니다.",
+            "",
+        ]
+    elif result.get("growth_to_slowdown"):
+        warning_lines += [
+            "⚠️ *[주의] 성장기 내 동행지표 둔화 조짐*",
+            "아직 둔화기 전환은 아니나 동행지표가 꺾이기 시작했습니다.",
+            "→ 수익 일부 실현, 방망이 짧게 잡기 시작 권고",
+            "",
+        ]
+
     lines = [
         f"🌐 *미국 경기 국면 분석* — {now.strftime('%Y년 %m월')}",
         "",
+    ] + warning_lines + [
         f"📌 현재 국면: *{result['phase']}*",
         "",
         "━━━ 🔮 선행지표 (미래 선행) ━━━",
