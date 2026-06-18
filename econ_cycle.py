@@ -371,6 +371,16 @@ def format_econ_report(result: dict) -> str:
         dt  = idx.strftime("%y.%m") if hasattr(idx, "strftime") else ""
         return f"{v:{fmt}} ({dt})"
 
+    def val_gdp() -> str:
+        """GDP는 분기 데이터 → Q표기로 명확히 표시."""
+        s = ind["gdp"]["series"]
+        if s.empty:
+            return "N/A"
+        v   = s.iloc[-1]
+        idx = s.index[-1]
+        q   = (idx.month - 1) // 3 + 1
+        return f"{v:.1f}% (Q{q} {idx.year}, BEA 공식)"
+
     def tl(key) -> str:
         return _trend_label(ind[key]["trend"])
 
@@ -416,7 +426,7 @@ def format_econ_report(result: dict) -> str:
         f"  → 동행 종합: *{_trend_label(result['coincident_score'])}*",
         "",
         "━━━ 📉 후행지표 (결과 확인) ━━━",
-        f"  🏛️ GDP 성장률(%)       {val('gdp')}  {tl('gdp')}",
+        f"  🏛️ GDP 성장률           {val_gdp()}  {tl('gdp')}",
         f"  👷 실업률(%)            {val('unemp')}  {unemp_raw}",
         f"  💵 시간당 임금($)       {val('wage')}  {tl('wage')}",
         f"  ⏱️ 주당 근로시간(h)     {val('hours')}  {tl('hours')}",
