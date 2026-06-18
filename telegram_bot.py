@@ -697,12 +697,17 @@ def _get_phase_quant_picks(phase: str) -> str:
 
         lines = [f"\n―――――― 🟢 BUY 추천 종목 ――――――"]
         for item in buy_items:
-            t   = item["ticker"]
-            sec = ticker_to_sector.get(t, "")
-            m3  = f"{item['mom3m']*100:+.1f}%" if item["mom3m"] is not None else " N/A "
+            t      = item["ticker"]
+            raw    = ticker_to_sector.get(t, "")
+            # 섹터명 단축: 이모지 + 첫 단어만 (괄호·가운뎃점 이후 제거)
+            parts  = raw.split(" ", 1)
+            emoji_ = parts[0] if len(parts) > 1 else ""
+            name_  = parts[1] if len(parts) > 1 else raw
+            name_  = name_.split("(")[0].split("·")[0].strip()
+            sec    = f"{emoji_}{name_}"
+            m3     = f"{item['mom3m']*100:+.1f}%" if item["mom3m"] is not None else "N/A"
             lines.append(
-                f"🟢BUY {t:<6} {sec:<18} "
-                f"점수:{item['score']:.2f}  3M:{m3}  RSI:{item['rsi']:.0f}"
+                f"🟢 {t} [{sec}] 점수:{item['score']:.2f} 3M:{m3} RSI:{item['rsi']:.0f}"
             )
         return "\n".join(lines)
     except Exception as e:
