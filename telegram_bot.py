@@ -33,7 +33,11 @@ from telegram.ext import (
     filters, ContextTypes,
 )
 from stock_research import research_stock, fetch_korean_news
-from econ_cycle import get_econ_cycle, format_econ_report
+from econ_cycle import (
+    get_econ_cycle, format_econ_report,
+    save_econ_cache, load_econ_cache,
+    load_last_phase, save_last_phase,
+)
 
 
 # ── 메시지 분할 & 안전 전송 헬퍼 ────────────────────────────────
@@ -144,10 +148,26 @@ def _load_alerts() -> dict:
             return json.loads(_ALERTS_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
+    # 로컬 파일 없음 → Gist에서 복구 (재배포 직후 첫 실행)
+    try:
+        from gist_store import load_json
+        data = load_json("alerts.json")
+        if data and isinstance(data, dict):
+            _ALERTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            print("[alerts] Gist에서 복구 완료")
+            return data
+    except Exception:
+        pass
     return {}
 
 def _save_alerts(data: dict) -> None:
     _ALERTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Gist 백업 (비동기 없이 동기 처리 — 알림 변경이 드물어 지연 무관)
+    try:
+        from gist_store import save_json
+        save_json("alerts.json", data)
+    except Exception:
+        pass
 
 
 TOKEN            = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -651,6 +671,41 @@ async def job_check_alerts(context) -> None:
 
 # ── 경기 국면 분석 ────────────────────────────────────────────
 
+def _get_phase_quant_picks(phase: str) -> str:
+    """경기 국면 추천 티커에 퀀트 점수 적용 → 포맷 문자열 반환."""
+    try:
+        from econ_cycle import _PHASE_TICKERS
+        from quant_us import score_tickers_quick
+
+        sectors = _PHASE_TICKERS.get(phase, [])
+        if not sectors:
+            return ""
+        all_tickers, ticker_to_sector = [], {}
+        for emoji, sector, tickers in sectors:
+            for t in tickers:
+                if t not in ticker_to_sector:
+                    all_tickers.append(t)
+                    ticker_to_sector[t] = f"{emoji} {sector}"
+
+        scored = score_tickers_quick(all_tickers)
+        if not scored:
+            return ""
+
+        lines = [f"📊 *{phase} 추천 종목 퀀트 점수*\n"]
+        for item in scored[:12]:
+            t   = item["ticker"]
+            sec = ticker_to_sector.get(t, "")
+            m3  = f"{item['mom3m']*100:+.1f}%" if item["mom3m"] is not None else " N/A "
+            lines.append(
+                f"{item['signal']} {t:<6} {sec:<18} "
+                f"점수:{item['score']:.2f}  3M:{m3}  RSI:{item['rsi']:.0f}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"[quant_picks] 실패: {e}")
+        return ""
+
+
 async def cmd_econ(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """미국 경기 국면 분석 — /econ 또는 '경기지표 알려줘'"""
     if not is_authorized(update):
@@ -659,35 +714,86 @@ async def cmd_econ(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         loop   = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, get_econ_cycle)
+
+        # 캐시·국면 상태 업데이트
+        save_econ_cache(result)
+        last_phase    = load_last_phase()
+        current_phase = result["phase"]
+        save_last_phase(current_phase)
+
         report = format_econ_report(result)
+
+        # 국면 전환 시 최상단에 경보 배너 추가
+        if last_phase and last_phase != current_phase:
+            report = (
+                f"🚨 *경기 국면 전환 감지!*\n"
+                f"*{last_phase}* → *{current_phase}*\n\n"
+                + report
+            )
+
         await msg.edit_text(report, parse_mode="Markdown")
+
+        # ── 퀀트 점수 follow-up ──────────────────────────────
+        q_msg = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⏳ 추천 종목 퀀트 점수 계산 중...",
+        )
+        picks = await loop.run_in_executor(None, lambda: _get_phase_quant_picks(current_phase))
+        if picks:
+            await q_msg.edit_text(picks, parse_mode="Markdown")
+        else:
+            await q_msg.delete()
+
     except Exception as e:
         await msg.edit_text(f"❌ 경기지표 조회 실패: {e}")
 
 
+async def _run_econ_and_notify(context, header: str) -> None:
+    """경기 분석 실행 → 캐시 갱신 → 전체 사용자에게 전송 (공통 로직)."""
+    loop   = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, get_econ_cycle)
+    save_econ_cache(result)
+    last_phase    = load_last_phase()
+    current_phase = result["phase"]
+    save_last_phase(current_phase)
+
+    report = format_econ_report(result)
+    if last_phase and last_phase != current_phase:
+        report = (
+            f"🚨 *경기 국면 전환 감지!*\n"
+            f"*{last_phase}* → *{current_phase}*\n\n"
+            + report
+        )
+
+    full = f"{header}\n\n{report}"
+    for cid in AUTHORIZED_CHATS:
+        try:
+            for chunk in smart_split(full):
+                await context.bot.send_message(chat_id=int(cid), text=chunk, parse_mode="Markdown")
+        except Exception:
+            pass
+
+
 async def job_econ_monthly(context) -> None:
-    """매월 25일 오전 8시 KST 자동 경기 국면 브리핑.
-    미국 주요 지표는 매월 21~25일 사이 업데이트되므로 25일 기준."""
-    today = datetime.now(KST)
-    if today.day != 28:
+    """매월 28일 오전 8시 KST 자동 경기 국면 브리핑."""
+    if datetime.now(KST).day != 28:
         return
     try:
-        loop   = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, get_econ_cycle)
-        report = f"📅 *월말 경기 국면 자동 브리핑*\n\n" + format_econ_report(result)
-        for cid in AUTHORIZED_CHATS:
-            try:
-                await context.bot.send_message(
-                    chat_id=int(cid), text=report, parse_mode="Markdown"
-                )
-            except Exception:
-                pass
+        await _run_econ_and_notify(context, "📅 *월말 경기 국면 자동 브리핑*")
     except Exception as e:
         for cid in AUTHORIZED_CHATS:
             try:
                 await context.bot.send_message(chat_id=int(cid), text=f"⚠️ 월말 경기 브리핑 실패: {e}")
             except Exception:
                 pass
+
+
+async def job_econ_phase_check(context) -> None:
+    """매주 일요일 오전 9시 KST 경기 국면 점검 — 전환 시 즉시 알림."""
+    try:
+        await _run_econ_and_notify(context, "🔍 *주간 경기 국면 점검*")
+    except Exception as e:
+        print(f"[econ_phase_check] 실패: {e}")
 
 
 # ── 사진 메시지 처리 ──────────────────────────────────────────
@@ -1338,6 +1444,12 @@ def _build_app() -> Application:
         job_econ_monthly,
         time=dtime(hour=8, minute=0, second=0, tzinfo=KST),
         name="econ_monthly_brief",
+    )
+    app.job_queue.run_daily(
+        job_econ_phase_check,
+        time=dtime(hour=9, minute=0, second=0, tzinfo=KST),
+        days=(6,),   # 일요일 (0=월, 6=일)
+        name="econ_phase_weekly",
     )
     return app
 

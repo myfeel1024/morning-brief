@@ -17,19 +17,28 @@
 """
 
 import os
+import json
 import requests
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
+from pathlib import Path
 
 # ── FRED API 설정 ─────────────────────────────────────────────
 _FRED_API_KEY  = os.getenv("FRED_API_KEY", "")
 _FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
+# ── 로컬 캐시 파일 경로 ───────────────────────────────────────
+_DIR        = Path(__file__).resolve().parent
+_CACHE_FILE = _DIR / "econ_cache.json"
+_PHASE_FILE = _DIR / "phase_state.json"
+
 # ── FRED 시리즈 ID ───────────────────────────────────────────
-# 선행지표
-_ID_PMI     = "GACDFSA066MSFRBPHI"  # 필라델피아 연준 제조업 현황 일반활동 확산지수 (월, SA)
-_ID_CSENT   = "UMCSENT"         # 미시간대 소비자심리지수 (월)
+# 선행지표 — PMI: 3개 지역 연준 합성 (ISM PMI 유료라 최대한 근사)
+_ID_PMI_PHI = "GACDFSA066MSFRBPHI"  # Philadelphia Fed 일반활동 확산지수 (월, SA)
+_ID_PMI_NY  = "GACDISA066MSFRBNY"   # NY Fed Empire State 현황지수 (월, SA)
+_ID_PMI_DAL = "BACTSAMFRBDAL"        # Dallas Fed 일반사업활동지수 (월, SA)
+_ID_CSENT   = "UMCSENT"              # 미시간대 소비자심리지수 (월)
 _ID_SPREAD  = "T10Y2Y"          # 장단기 금리차 10Y-2Y (일별)
 # 동행지표
 _ID_INDPRO  = "INDPRO"          # 산업생산지수 (월)
@@ -180,11 +189,24 @@ def get_econ_cycle() -> dict:
         ind["sp500"] = {"name": "S&P 500", "series": pd.Series(dtype=float), "trend": 0.0}
 
     try:
-        pmi = _fetch_fred(_ID_PMI, 12)
-        ind["pmi"] = {"name": "필라델피아 PMI", "series": pmi, "trend": _trend(pmi)}
+        # ISM PMI는 FRED 무료 미제공 → 필라델피아·뉴욕·달라스 3개 지역 연준 합성
+        pmi_raw = []
+        for sid in [_ID_PMI_PHI, _ID_PMI_NY, _ID_PMI_DAL]:
+            try:
+                s = _fetch_fred(sid, 12)
+                if not s.empty:
+                    pmi_raw.append(s)
+            except Exception:
+                pass
+        if pmi_raw:
+            pmi = pd.concat(pmi_raw, axis=1).mean(axis=1).dropna().tail(12)
+            ind["pmi"] = {"name": "연준 PMI 합성", "series": pmi, "trend": _trend(pmi)}
+        else:
+            errors.append("PMI: 전체 조회 실패")
+            ind["pmi"] = {"name": "연준 PMI 합성", "series": pd.Series(dtype=float), "trend": 0.0}
     except Exception as e:
         errors.append(f"PMI: {e}")
-        ind["pmi"] = {"name": "필라델피아 PMI", "series": pd.Series(dtype=float), "trend": 0.0}
+        ind["pmi"] = {"name": "연준 PMI 합성", "series": pd.Series(dtype=float), "trend": 0.0}
 
     try:
         cs = _fetch_fred(_ID_CSENT, 12)
@@ -413,7 +435,7 @@ def format_econ_report(result: dict) -> str:
         "",
         "━━━ 🔮 선행지표 (미래 선행) ━━━",
         f"  📈 S\\&P500              {val('sp500', '.0f')}  {tl('sp500')}",
-        f"  🏭 필라델피아 PMI        {val('pmi', '.1f')}  {tl('pmi')}",
+        f"  🏭 연준 PMI 합성          {val('pmi', '.1f')}  {tl('pmi')}",
         f"  😊 소비자심리지수       {val('csent')}  {tl('csent')}",
         f"  📐 장단기 금리차(%)     {val('spread', '.2f')}  {tl('spread')}",
         f"  → 선행 종합: *{_trend_label(result['leading_score'])}*",
@@ -462,3 +484,55 @@ def format_econ_report(result: dict) -> str:
         lines.append(f"⚠️ 데이터 조회 실패: {err_summary}")
 
     return "\n".join(lines)
+
+
+# ── 캐시 & 국면 상태 유틸 ────────────────────────────────────
+
+def save_econ_cache(result: dict) -> None:
+    """마지막 경기 분석 요약을 캐시 (모닝 브리핑·국면 전환 판단용)."""
+    cache = {
+        "phase":             result["phase"],
+        "leading_score":     result["leading_score"],
+        "coincident_score":  result["coincident_score"],
+        "lagging_score":     result["lagging_score"],
+        "slowdown_warning":  result.get("slowdown_warning", False),
+        "growth_to_slowdown": result.get("growth_to_slowdown", False),
+        "updated":           datetime.now().strftime("%Y-%m-%d"),
+    }
+    try:
+        _CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print(f"[econ] 캐시 저장 실패: {e}")
+
+
+def load_econ_cache() -> dict:
+    """캐시된 경기 분석 요약 로드. 없으면 빈 dict."""
+    try:
+        if _CACHE_FILE.exists():
+            return json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def load_last_phase() -> str:
+    """이전 국면 로드. 없으면 빈 문자열."""
+    try:
+        if _PHASE_FILE.exists():
+            data = json.loads(_PHASE_FILE.read_text(encoding="utf-8"))
+            return data.get("phase", "")
+    except Exception:
+        pass
+    return ""
+
+
+def save_last_phase(phase: str) -> None:
+    """현재 국면을 파일에 저장 (전환 감지용)."""
+    try:
+        _PHASE_FILE.write_text(
+            json.dumps({"phase": phase, "updated": datetime.now().strftime("%Y-%m-%d")},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"[econ] 국면 상태 저장 실패: {e}")

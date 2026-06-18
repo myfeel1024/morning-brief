@@ -519,11 +519,27 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
     # ─ 공포탐욕지수
     fear_greed = get_fear_greed()
 
+    # ─ 경기 국면 요약 (캐시에서 읽기 — FRED 호출 없음)
+    econ_summary = ""
+    try:
+        from econ_cycle import load_econ_cache
+        cache = load_econ_cache()
+        if cache:
+            phase = cache["phase"]
+            lead  = "↑" if cache.get("leading_score", 0) > 0 else "↓"
+            coin  = "↑" if cache.get("coincident_score", 0) > 0 else "↓"
+            warn  = " ⚠️ 둔화 경보!" if cache.get("slowdown_warning") else ""
+            upd   = cache.get("updated", "")
+            econ_summary = f"📌 경기국면: *{phase}* | 선행{lead} 동행{coin}{warn}  _{upd}_"
+    except Exception:
+        pass
+
     # ─ 최종 메시지 조합
     separator = "\n" + "─" * 28 + "\n"
     message = (
         f"🇺🇸 *코스피 모닝 브리핑*\n`{now}`"
         + (f"\n{fear_greed}" if fear_greed else "")
+        + (f"\n{econ_summary}" if econ_summary else "")
         + separator
         + market_summary
         + separator

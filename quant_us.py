@@ -190,5 +190,41 @@ def run_us_quant(top_n: int = 10, send_to: list[str] | None = None) -> str:
     return result
 
 
+def score_tickers_quick(tickers: list, top_n: int = None) -> list:
+    """경기 국면 추천 티커에 퀀트 점수 계산 (빠른 버전, 소수 티커 전용).
+
+    Returns list of dicts: ticker, score, signal, mom3m, rsi, price
+    """
+    if not tickers:
+        return []
+    try:
+        raw = yf.download(
+            list(tickers), period="9mo", interval="1d",
+            auto_adjust=True, progress=False, threads=True,
+        )
+        closes = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
+        if isinstance(closes, pd.Series):
+            closes = closes.to_frame(tickers[0])
+        closes = closes.ffill().dropna(how="all")
+        df = _compute_factors(closes)
+        if df.empty:
+            return []
+        n = top_n or len(df)
+        results = []
+        for ticker, row in df.head(n).iterrows():
+            results.append({
+                "ticker": ticker,
+                "score":  round(float(row["score"]), 2),
+                "signal": row["signal"],
+                "mom3m":  float(row["mom3m"]) if not np.isnan(row["mom3m"]) else None,
+                "rsi":    float(row["rsi"]),
+                "price":  float(row["price"]),
+            })
+        return results
+    except Exception as e:
+        print(f"[score_tickers_quick] 실패: {e}")
+        return []
+
+
 if __name__ == "__main__":
     run_us_quant()
