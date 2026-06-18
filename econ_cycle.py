@@ -28,20 +28,19 @@ _FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
 # ── FRED 시리즈 ID ───────────────────────────────────────────
 # 선행지표
-_ID_PMI     = "PHIMFGINDX"      # 필라델피아 연준 제조업지수 (ISM PMI 대체, 월)
-                                  # ISM PMI는 FRED 무료 미제공 → 방향성 동일한 필라델피아 지수 사용
+_ID_PMI     = "PHIMFGINDX"      # 필라델피아 연준 제조업지수 (월)
 _ID_CSENT   = "UMCSENT"         # 미시간대 소비자심리지수 (월)
 _ID_SPREAD  = "T10Y2Y"          # 장단기 금리차 10Y-2Y (일별)
 # 동행지표
 _ID_INDPRO  = "INDPRO"          # 산업생산지수 (월)
 _ID_RETAIL  = "RSAFS"           # 소매판매 (월, 백만달러)
 _ID_CAPU    = "TCU"             # 설비 가동률 (월, %)
+_ID_EXPORT  = "BOPTEXP"         # 수출액 (월, 백만달러) — 글로벌 수요 동행 지표
 # 후행지표
 _ID_GDP     = "A191RL1Q225SBEA" # 실질GDP 성장률 % SAAR (분기)
 _ID_UNEMP   = "UNRATE"          # 실업률 (월)
 _ID_WAGE    = "CES0500000003"   # 시간당 평균임금 (월, 달러)
-# 물가지표 (인플레이션 압력 — 상 계산 미포함, 표시 전용)
-_ID_PPI     = "PPIFIS"          # 생산자물가지수 PPI: Final Demand (월)
+_ID_HOURS   = "AWHAETP"         # 주당 평균 근로시간 (월, 전체 민간부문)
 
 
 def _fetch_fred(series_id: str, n: int = 24) -> pd.Series:
@@ -195,6 +194,13 @@ def get_econ_cycle() -> dict:
         errors.append(f"설비 가동률: {e}")
         ind["capu"] = {"name": "설비 가동률(%)", "series": pd.Series(dtype=float), "trend": 0.0}
 
+    try:
+        ex = _fetch_fred(_ID_EXPORT, 12)
+        ind["export"] = {"name": "수출액($M)", "series": ex, "trend": _trend(ex)}
+    except Exception as e:
+        errors.append(f"수출: {e}")
+        ind["export"] = {"name": "수출액($M)", "series": pd.Series(dtype=float), "trend": 0.0}
+
     # ── 후행지표 ─────────────────────────────────────────────
     try:
         gdp = _fetch_fred(_ID_GDP, 8)
@@ -217,24 +223,23 @@ def get_econ_cycle() -> dict:
         errors.append(f"임금: {e}")
         ind["wage"] = {"name": "시간당 평균임금($)", "series": pd.Series(dtype=float), "trend": 0.0}
 
-    # ── 물가지표 (표시 전용, 국면 점수 미반영) ───────────────────
     try:
-        ppi = _fetch_fred(_ID_PPI, 12)
-        ind["ppi"] = {"name": "생산자물가지수(PPI)", "series": ppi, "trend": _trend(ppi)}
+        hr = _fetch_fred(_ID_HOURS, 12)
+        ind["hours"] = {"name": "주당 근로시간(h)", "series": hr, "trend": _trend(hr)}
     except Exception as e:
-        errors.append(f"PPI: {e}")
-        ind["ppi"] = {"name": "생산자물가지수(PPI)", "series": pd.Series(dtype=float), "trend": 0.0}
+        errors.append(f"주당근로시간: {e}")
+        ind["hours"] = {"name": "주당 근로시간(h)", "series": pd.Series(dtype=float), "trend": 0.0}
 
     # ── 그룹 종합 점수 ────────────────────────────────────────
-    # 선행 4개 평균 (sp500, pmi, csent, spread)
+    # 선행 4개: 주가, PMI, 소비자심리, 장단기금리차
     leading_score    = (ind["sp500"]["trend"] + ind["pmi"]["trend"]
                         + ind["csent"]["trend"] + ind["spread"]["trend"]) / 4
-    # 동행 3개 평균
+    # 동행 4개: 산업생산, 소매판매, 설비가동률, 수출
     coincident_score = (ind["indpro"]["trend"] + ind["retail"]["trend"]
-                        + ind["capu"]["trend"]) / 3
-    # 후행 3개 평균 (임금은 lagging의 lagging)
+                        + ind["capu"]["trend"]  + ind["export"]["trend"]) / 4
+    # 후행 4개: GDP, 실업률(역행), 임금, 주당근로시간
     lagging_score    = (ind["gdp"]["trend"] + ind["unemp"]["trend"]
-                        + ind["wage"]["trend"]) / 3
+                        + ind["wage"]["trend"] + ind["hours"]["trend"]) / 4
 
     L = _dir(leading_score)
     C = _dir(coincident_score)
@@ -377,17 +382,15 @@ def format_econ_report(result: dict) -> str:
         f"  🏗️ 산업생산지수         {val('indpro')}  {tl('indpro')}",
         f"  🛒 소매판매($M)         {val('retail', '.0f')}  {tl('retail')}",
         f"  ⚙️ 설비 가동률(%)       {val('capu')}  {tl('capu')}",
+        f"  🚢 수출액($M)           {val('export', '.0f')}  {tl('export')}",
         f"  → 동행 종합: *{_trend_label(result['coincident_score'])}*",
         "",
         "━━━ 📉 후행지표 (결과 확인) ━━━",
         f"  🏛️ GDP 성장률(%)       {val('gdp')}  {tl('gdp')}",
         f"  👷 실업률(%)            {val('unemp')}  {unemp_raw}",
         f"  💵 시간당 임금($)       {val('wage')}  {tl('wage')}",
+        f"  ⏱️ 주당 근로시간(h)     {val('hours')}  {tl('hours')}",
         f"  → 후행 종합: *{_trend_label(result['lagging_score'])}*",
-        "",
-        "━━━ 💹 물가지표 (인플레이션 압력) ━━━",
-        f"  📦 생산자물가(PPI)       {val('ppi', '.1f')}  {tl('ppi')}",
-        f"  ℹ️ PPI↑=물가 상승 압력 / PPI↓=디플레 압력 (국면 판정 미포함)",
         "",
         "━━━ 국면 적합도 ━━━",
     ]
