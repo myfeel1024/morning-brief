@@ -220,6 +220,38 @@ def fetch_korean_news(n: int = 8) -> list[str]:
 
 # ── 한국 주식 실시간 데이터 (yfinance .KS/.KQ) ───────────────
 
+def _get_kr_price_naver(stock_code: str) -> dict:
+    """네이버 금융 실시간 polling API — 장중에도 수 초~수십 초 지연 수준.
+    pykrx(장마감 후 확정치)·yfinance(15~20분 지연)보다 장중 정확도가 높음.
+    """
+    try:
+        url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{stock_code}"
+        res = requests.get(url, timeout=5, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://finance.naver.com/",
+        })
+        data  = res.json()
+        areas = data.get("result", {}).get("areas", [])
+        if not areas or not areas[0].get("datas"):
+            return {}
+        d     = areas[0]["datas"][0]
+        price = float(d.get("nv", 0) or 0)
+        if price <= 0:
+            return {}
+        pct_raw = d.get("cr")
+        if pct_raw in (None, ""):
+            return {"price": price}
+        pct = float(pct_raw)
+        # rf: 2=상승, 5=하락, 3=보합 — cr 부호가 누락된 경우 보정
+        if str(d.get("rf", "")) == "5" and pct > 0:
+            pct = -pct
+        prev = price / (1 + pct / 100) if pct != -100 else None
+        diff = (price - prev) if prev else None
+        return {"price": price, "prev": prev, "diff": diff, "pct": pct}
+    except Exception:
+        return {}
+
+
 def _get_kr_price_pykrx(stock_code: str) -> float:
     """pykrx로 한국 주식 현재가(당일 or 전일 종가) 조회."""
     try:
@@ -238,13 +270,18 @@ def _get_kr_price_pykrx(stock_code: str) -> float:
 def get_kr_stock_realtime(stock_code: str) -> dict:
     """
     한국 주식 실시간 데이터 조회.
-    가격: pykrx(KRX 직접) 우선, yfinance 보조.
+    가격: 네이버 금융 실시간(장중 최우선) → pykrx(장마감 확정치) → yfinance 순.
     재무지표: yfinance.
     """
-    # ── Step 1: 현재가 (pykrx 우선) ──
-    price = _get_kr_price_pykrx(stock_code)
+    # ── Step 1: 네이버 실시간 (장중 가장 정확) ──
+    naver = _get_kr_price_naver(stock_code)
+    price = naver.get("price", 0) or 0
 
-    # ── Step 2: yfinance (재무지표 + 가격 보조) ──
+    # ── Step 2: pykrx (네이버 실패 시 — 장마감 후 확정치) ──
+    if price <= 0:
+        price = _get_kr_price_pykrx(stock_code)
+
+    # ── Step 3: yfinance (재무지표 + 가격 최종 보조) ──
     yf_fi   = None
     yf_info = {}
     for suffix in [".KS", ".KQ"]:
@@ -258,7 +295,7 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
                     yf_price = float(hist["Close"].iloc[-1])
             if yf_price and yf_price > 0:
                 if price <= 0:
-                    price = yf_price   # pykrx 실패 시 yfinance 사용
+                    price = yf_price   # 네이버·pykrx 모두 실패 시 사용
                 yf_fi   = fi
                 yf_info = t.info
                 break
@@ -268,11 +305,15 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
     if not price or price <= 0:
         return {}
 
-    prev   = (yf_fi.previous_close if yf_fi else None)
     result = {"현재가": f"{price:,.0f}원"}
 
-    # 등락
-    if prev and prev > 0:
+    # 등락 — 네이버 실시간 데이터 우선, 없으면 yfinance 전일종가로 계산
+    if naver.get("diff") is not None and naver.get("pct") is not None:
+        diff, pct = naver["diff"], naver["pct"]
+        arrow = "▲" if diff >= 0 else "▼"
+        result["등락"] = f"{arrow} {abs(diff):,.0f}원 ({pct:+.2f}%)"
+    elif yf_fi and yf_fi.previous_close and yf_fi.previous_close > 0:
+        prev  = yf_fi.previous_close
         diff  = price - prev
         pct   = diff / prev * 100
         arrow = "▲" if diff >= 0 else "▼"
