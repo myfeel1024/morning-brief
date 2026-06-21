@@ -235,24 +235,26 @@ def _get_kr_price_naver(stock_code: str) -> dict:
             print(f"[naver_polling] {stock_code} HTTP {res.status_code}", flush=True)
             return {}
         data  = res.json()
-        areas = data.get("result", {}).get("areas", [])
-        if not areas or not areas[0].get("datas"):
+        datas = data.get("datas", [])
+        if not datas:
             print(f"[naver_polling] {stock_code} 빈 응답: {data}", flush=True)
             return {}
-        d     = areas[0]["datas"][0]
-        price = float(d.get("nv", 0) or 0)
+        d = datas[0]
+        price_raw = d.get("closePrice", "")
+        price = float(str(price_raw).replace(",", "")) if price_raw else 0.0
         if price <= 0:
             print(f"[naver_polling] {stock_code} price<=0: {d}", flush=True)
             return {}
-        pct_raw = d.get("cr")
-        if pct_raw in (None, ""):
-            return {"price": price}
-        pct = float(pct_raw)
-        # rf: 2=상승, 5=하락, 3=보합 — cr 부호가 누락된 경우 보정
-        if str(d.get("rf", "")) == "5" and pct > 0:
+        diff_raw = d.get("compareToPreviousClosePrice", "")
+        diff = float(str(diff_raw).replace(",", "")) if diff_raw not in (None, "") else None
+        sign = (d.get("compareToPreviousPrice") or {}).get("code", "")
+        if diff is not None and sign == "5" and diff > 0:
+            diff = -diff
+        pct_raw = d.get("fluctuationsRatio", "")
+        pct = float(pct_raw) if pct_raw not in (None, "") else None
+        if pct is not None and sign == "5" and pct > 0:
             pct = -pct
-        prev = price / (1 + pct / 100) if pct != -100 else None
-        diff = (price - prev) if prev else None
+        prev = (price - diff) if diff is not None else None
         return {"price": price, "prev": prev, "diff": diff, "pct": pct}
     except Exception as e:
         print(f"[naver_polling] {stock_code} 실패: {e}", flush=True)
