@@ -512,9 +512,13 @@ def research_stock(stock_name: str) -> str:
                     if r["target_price"]:
                         try:
                             tp = float(r["target_price"].replace(",", "").replace("원", ""))
-                            # 현재가 대비 5배 초과 목표주가는 스크래핑 오류로 제외
-                            if current_price > 0 and tp > current_price * 5:
-                                r["target_price"] = ""
+                            # 현재가 대비 5배 초과 또는 1/5 미만 목표주가는 액면분할·급등 등으로
+                            # 시점이 어긋난 과거 리포트일 가능성이 높아 upside 계산 없이 표시만
+                            implausible = current_price > 0 and (
+                                tp > current_price * 5 or tp < current_price * 0.2
+                            )
+                            if implausible:
+                                line += f" | 목표주가 {r['target_price']} (※시점 불일치로 upside 계산 제외)"
                             else:
                                 upside = (tp - current_price) / current_price * 100 if current_price > 0 else 0
                                 line += f" | 목표주가 {r['target_price']} ({upside:+.1f}%)"
