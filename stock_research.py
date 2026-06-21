@@ -7,6 +7,7 @@
 import re
 import requests
 import urllib.parse
+from datetime import datetime, timedelta
 from xml.etree import ElementTree as ET
 import yfinance as yf
 
@@ -79,50 +80,56 @@ def get_google_news(query: str, n: int = 6) -> list[str]:
 
 # ── 네이버 금융 증권사 리포트 스크래핑 ───────────────────────
 
-def get_naver_analyst_reports(stock_code: str, n: int = 5) -> list[dict]:
-    """네이버 금융 증권사 리포트 및 목표주가 수집"""
-    if not BS4_OK or not stock_code:
+def _extract_target_price(preview: str) -> str:
+    """리포트 미리보기 본문에서 목표주가 추출. '380만원' / '1,650,000원' 형식 모두 지원."""
+    if not preview:
+        return ""
+    text = preview.replace("&nbsp;", " ")
+    m = re.search(r"목표\S{0,3}가\S{0,2}\s*([\d,]+)\s*만\s*원", text)
+    if m:
+        return f"{int(m.group(1).replace(',', '')) * 10000:,}원"
+    m = re.search(r"목표\S{0,3}가\S{0,2}\s*([\d,]{4,})\s*원", text)
+    if m:
+        return f"{int(m.group(1).replace(',', '')):,}원"
+    return ""
+
+
+def get_naver_analyst_reports(stock_code: str, n: int = 5, days: int = 90) -> list[dict]:
+    """네이버 증권 모바일 리서치 API에서 최근 증권사 리포트 및 목표주가 수집.
+
+    예전엔 finance.naver.com의 데스크톱 리서치 표를 스크래핑했는데, 그 표의 마지막 컬럼은
+    목표가가 아니라 조회수였다(둘 다 비슷한 크기의 숫자라 오랫동안 들키지 않았음). 목표가는
+    표에 없고 리포트 본문에만 텍스트로 적혀 있어서, 종목별 모바일 리서치 API
+    (m.stock.naver.com/api/research/stock/{code})의 previewContent에서 정규식으로 추출한다.
+    """
+    if not stock_code:
         return []
-
-    url = f"https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode={stock_code}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": "https://finance.naver.com",
-    }
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        res.encoding = "cp949"   # 네이버 리서치 페이지는 EUC-KR/CP949 — UTF-8로 강제하면 한글이 깨짐
-        soup = BeautifulSoup(res.text, "html.parser")
+        url = f"https://m.stock.naver.com/api/research/stock/{stock_code}?page=1&pageSize=30"
+        res = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": f"https://m.stock.naver.com/domestic/stock/{stock_code}/research",
+            "Accept": "application/json, text/plain, */*",
+        })
+        if res.status_code != 200:
+            return []
+        items = res.json()
+        cutoff = datetime.now() - timedelta(days=days)
 
-        # 테이블 컬럼 순서(고정): [0]종목명 [1]제목 [2]증권사 [3]투자의견 [4]작성일(YY.MM.DD) [5]목표가
         reports = []
-        for row in soup.select("tr"):
-            cols = row.find_all("td")
-            if len(cols) < 6:
-                continue
-            texts = [c.get_text(strip=True) for c in cols]
-            title = texts[1]   # [0]은 종목명 링크, [1]이 실제 리포트 제목
-            if not title or len(title) < 2:
-                continue
-
-            firm        = texts[2]
-            opinion_raw = texts[3]
-            date_raw    = texts[4]
-            target_raw  = texts[5]
-
-            target = ""
-            if re.match(r"^[\d,]+$", target_raw) and len(target_raw.replace(",", "")) >= 4:
-                target = target_raw + "원"
-
-            date = date_raw if re.match(r"\d{2}\.\d{2}\.\d{2}", date_raw) else ""
-
+        for it in items:
+            write_date = it.get("writeDate", "")
+            try:
+                if datetime.strptime(write_date, "%Y-%m-%d") < cutoff:
+                    continue
+            except ValueError:
+                pass
             reports.append({
-                "title": title[:60],
-                "firm": firm,
-                "target_price": target,
-                "opinion": opinion_raw,
-                "date": date,
+                "title": (it.get("title") or "")[:60],
+                "firm": it.get("brokerName", ""),
+                "target_price": _extract_target_price(it.get("previewContent", "")),
+                "opinion": "",
+                "date": write_date,
             })
             if len(reports) >= n:
                 break
