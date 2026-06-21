@@ -276,10 +276,13 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
     # ── Step 1: 네이버 실시간 (장중 가장 정확) ──
     naver = _get_kr_price_naver(stock_code)
     price = naver.get("price", 0) or 0
+    source = "naver" if price > 0 else ""
 
     # ── Step 2: pykrx (네이버 실패 시 — 장마감 후 확정치) ──
     if price <= 0:
         price = _get_kr_price_pykrx(stock_code)
+        if price > 0:
+            source = "pykrx"
 
     # ── Step 3: yfinance (재무지표 + 가격 최종 보조) ──
     yf_fi   = None
@@ -296,11 +299,14 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
             if yf_price and yf_price > 0:
                 if price <= 0:
                     price = yf_price   # 네이버·pykrx 모두 실패 시 사용
+                    source = "yfinance"
                 yf_fi   = fi
                 yf_info = t.info
                 break
         except Exception:
             continue
+
+    print(f"[KR price] {stock_code} source={source or 'FAILED'} price={price}", flush=True)
 
     if not price or price <= 0:
         return {}

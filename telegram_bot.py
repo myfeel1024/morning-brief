@@ -244,8 +244,13 @@ def format_macro(data: dict) -> str:
 
 # ── 외국인·기관 순매수 (pykrx) ───────────────────────────────
 
+_investor_flow_broken = False   # pykrx 투자자별 거래 API가 KRX 로그인을 요구해 실패하면 이후 호출 생략
+
 def get_investor_flow(stock_name: str) -> str:
     """최근 5거래일 외국인·기관 순매수 (한국 주식 전용). 실패 시 빈 문자열."""
+    global _investor_flow_broken
+    if _investor_flow_broken:
+        return ""
     try:
         from pykrx import stock as pk
         from stock_research import get_kr_stock_code
@@ -256,6 +261,8 @@ def get_investor_flow(stock_name: str) -> str:
         start = (datetime.now() - timedelta(days=14)).strftime("%Y%m%d")
         df = pk.get_market_trading_value_by_investor(start, end, code)
         if df is None or df.empty:
+            # pykrx 내부에서 KRX 로그인 요구 등으로 빈 결과만 돌려주는 경우도 동일 처리
+            _investor_flow_broken = True
             return ""
         df = df.tail(5)
         foreign     = df.get("외국인합계", df.get("외국인", None))
@@ -267,7 +274,9 @@ def get_investor_flow(stock_name: str) -> str:
         f_str = f"{'매수' if f_val >= 0 else '매도'} {abs(f_val):.0f}억"
         i_str = f"{'매수' if i_val >= 0 else '매도'} {abs(i_val):.0f}억"
         return f"[최근5일 수급] 외국인 {f_str} / 기관 {i_str}"
-    except Exception:
+    except Exception as e:
+        print(f"[investor_flow] 비활성화 (사유: {e})", flush=True)
+        _investor_flow_broken = True
         return ""
 
 
@@ -1118,6 +1127,9 @@ def _detect_stocks_in_text(text: str) -> list[str]:
     for name in KR_STOCK_MAP:
         if name in text and name not in found:
             found.append(name)
+    # 짧은 종목명이 다른 매칭 종목명의 부분 문자열이면 제거
+    # 예) "SK하이닉스 알려줘" → "SK"(SK㈜, 별개 종목)가 "SK하이닉스"의 부분으로 함께 매칭되는 것 방지
+    found = [n for n in found if not any(n != other and n in other for other in found)]
     # 미국 주식: 한국어 이름 → 티커 변환 (실시간 가격 보장)
     for kr_name, ticker in _KR_TO_US.items():
         if kr_name in text and ticker not in found:
@@ -1249,9 +1261,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # ── 시스템 프롬프트 (매번 최신 매크로 반영) ──
+    price_block = (
+        chr(10) + "[현재가 (이 수치를 기준으로 모든 원 단위 계산)]" + chr(10) + price_summary
+        if price_summary else
+        chr(10) + "[알림] 실시간 가격 데이터 조회에 실패했습니다. 가격을 추측해서 답변하지 말고, "
+        "가격이 필요한 질문에는 '현재가 조회에 실패했습니다. 잠시 후 다시 시도해주세요'라고 명확히 안내하세요." + chr(10)
+        if detected else ""
+    )
+
     system_prompt = f"""당신은 한국 주식/투자 전문 비서입니다.
 이전 대화 맥락을 기억하고 이어서 답변하세요.
-{(chr(10) + "[현재가 (이 수치를 기준으로 모든 원 단위 계산)]" + chr(10) + price_summary) if price_summary else ""}
+{price_block}
 [현재 매크로 환경]
 {macro_text}
 
@@ -1265,7 +1285,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - 매수/매도 타점·지지선·목표가 언급 시 반드시 실제 주가(원) 계산해서 표기
   예) 현재가 200,000원 기준 "-3% 구간 → 약 194,000원", "20일선 지지 → 약 190,000원대"
   반드시 위 현재가를 기준으로 직접 계산하여 원 단위로 표기할 것. 퍼센트(%)만 쓰면 안 됨
-- 절대 사용자에게 현재가를 물어보지 말 것. 현재가는 위에 제공됨
+- 위에 현재가가 제공되지 않았다면 절대 가격을 추측하지 말 것 (위 [알림] 지침 따름)
+- 절대 사용자에게 현재가를 물어보지 말 것. 현재가가 제공된 경우 그것을 사용
 - 이전 대화에서 언급된 종목/주제가 있으면 자연스럽게 연결
 - 투자 결정은 본인 책임임을 마지막 한 줄에 언급
 - 텔레그램 일반 텍스트 메시지 규칙: 마크다운 헤더(#, ##, ###), 볼드(**), 기울임(*), 수평선(---), 표(|) 절대 사용 금지. 이모지 + 일반 텍스트로만 구성
