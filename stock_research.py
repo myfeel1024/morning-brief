@@ -92,40 +92,36 @@ def get_naver_analyst_reports(stock_code: str, n: int = 5) -> list[dict]:
     }
     try:
         res = requests.get(url, headers=headers, timeout=10)
-        res.encoding = "utf-8"
+        res.encoding = "cp949"   # 네이버 리서치 페이지는 EUC-KR/CP949 — UTF-8로 강제하면 한글이 깨짐
         soup = BeautifulSoup(res.text, "html.parser")
 
+        # 테이블 컬럼 순서(고정): [0]종목명 [1]제목 [2]증권사 [3]투자의견 [4]작성일(YY.MM.DD) [5]목표가
         reports = []
         for row in soup.select("tr"):
             cols = row.find_all("td")
-            if len(cols) < 3:
+            if len(cols) < 6:
                 continue
             texts = [c.get_text(strip=True) for c in cols]
-            title_a = row.find("a")
-            title = title_a.get_text(strip=True) if title_a else ""
-            if not title or len(title) < 4:
+            title = texts[1]   # [0]은 종목명 링크, [1]이 실제 리포트 제목
+            if not title or len(title) < 2:
                 continue
 
-            target, opinion, firm, date = "", "", "", ""
-            for text in texts:
-                if re.match(r"^[\d,]+원?$", text) and len(text) >= 5:
-                    target = text if "원" in text else text + "원"
-                elif text in ["매수", "중립", "매도", "BUY", "HOLD", "비중확대",
-                               "시장수익률상회", "아웃퍼폼", "Outperform"]:
-                    opinion = text
-                elif re.match(r"\d{4}\.\d{2}\.\d{2}", text):
-                    date = text
-                elif (len(text) >= 2 and len(text) <= 15
-                      and text != title
-                      and not re.match(r"[\d,]+", text)
-                      and not firm):
-                    firm = text
+            firm        = texts[2]
+            opinion_raw = texts[3]
+            date_raw    = texts[4]
+            target_raw  = texts[5]
+
+            target = ""
+            if re.match(r"^[\d,]+$", target_raw) and len(target_raw.replace(",", "")) >= 4:
+                target = target_raw + "원"
+
+            date = date_raw if re.match(r"\d{2}\.\d{2}\.\d{2}", date_raw) else ""
 
             reports.append({
                 "title": title[:60],
                 "firm": firm,
                 "target_price": target,
-                "opinion": opinion,
+                "opinion": opinion_raw,
                 "date": date,
             })
             if len(reports) >= n:
