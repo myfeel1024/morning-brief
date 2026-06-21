@@ -227,9 +227,13 @@ def _get_kr_price_naver(stock_code: str) -> dict:
     try:
         url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{stock_code}"
         res = requests.get(url, timeout=5, headers={
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Referer": "https://finance.naver.com/",
+            "Accept": "application/json, text/plain, */*",
         })
+        if res.status_code != 200:
+            print(f"[naver_polling] {stock_code} HTTP {res.status_code}", flush=True)
+            return {}
         data  = res.json()
         areas = data.get("result", {}).get("areas", [])
         if not areas or not areas[0].get("datas"):
@@ -248,7 +252,41 @@ def _get_kr_price_naver(stock_code: str) -> dict:
         prev = price / (1 + pct / 100) if pct != -100 else None
         diff = (price - prev) if prev else None
         return {"price": price, "prev": prev, "diff": diff, "pct": pct}
-    except Exception:
+    except Exception as e:
+        print(f"[naver_polling] {stock_code} 실패: {e}", flush=True)
+        return {}
+
+
+def _get_kr_price_naver_mobile(stock_code: str) -> dict:
+    """네이버 모바일 증권 API — polling API가 차단될 때의 2차 네이버 소스."""
+    try:
+        url = f"https://m.stock.naver.com/api/stock/{stock_code}/basic"
+        res = requests.get(url, timeout=5, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": f"https://m.stock.naver.com/domestic/stock/{stock_code}/total",
+            "Accept": "application/json, text/plain, */*",
+        })
+        if res.status_code != 200:
+            print(f"[naver_mobile] {stock_code} HTTP {res.status_code}", flush=True)
+            return {}
+        d = res.json()
+        price_raw = d.get("closePrice", "")
+        price = float(str(price_raw).replace(",", "")) if price_raw else 0.0
+        if price <= 0:
+            return {}
+        diff_raw = d.get("compareToPreviousClosePrice", "")
+        diff = float(str(diff_raw).replace(",", "")) if diff_raw not in (None, "") else None
+        sign = (d.get("compareToPreviousPrice") or {}).get("code", "")
+        if diff is not None and sign == "5" and diff > 0:
+            diff = -diff
+        pct_raw = d.get("fluctuationsRatio", "")
+        pct = float(pct_raw) if pct_raw not in (None, "") else None
+        if pct is not None and sign == "5" and pct > 0:
+            pct = -pct
+        prev = (price - diff) if diff is not None else None
+        return {"price": price, "prev": prev, "diff": diff, "pct": pct}
+    except Exception as e:
+        print(f"[naver_mobile] {stock_code} 실패: {e}", flush=True)
         return {}
 
 
@@ -262,29 +300,38 @@ def _get_kr_price_pykrx(stock_code: str) -> float:
             df = krx.get_market_ohlcv_by_date(d, d, stock_code)
             if not df.empty:
                 return float(df["종가"].iloc[-1])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[pykrx_price] {stock_code} 실패: {e}", flush=True)
     return 0.0
 
 
 def get_kr_stock_realtime(stock_code: str) -> dict:
     """
     한국 주식 실시간 데이터 조회.
-    가격: 네이버 금융 실시간(장중 최우선) → pykrx(장마감 확정치) → yfinance 순.
+    가격: 네이버 polling → 네이버 모바일 → pykrx(장마감 확정치) → yfinance 순.
     재무지표: yfinance.
     """
-    # ── Step 1: 네이버 실시간 (장중 가장 정확) ──
+    print(f"[KR price] {stock_code} 조회 시작", flush=True)
+
+    # ── Step 1: 네이버 실시간 polling ──
     naver = _get_kr_price_naver(stock_code)
     price = naver.get("price", 0) or 0
-    source = "naver" if price > 0 else ""
+    source = "naver_polling" if price > 0 else ""
 
-    # ── Step 2: pykrx (네이버 실패 시 — 장마감 후 확정치) ──
+    # ── Step 2: 네이버 모바일 (polling 차단 시 2차 소스) ──
+    if price <= 0:
+        naver = _get_kr_price_naver_mobile(stock_code)
+        price = naver.get("price", 0) or 0
+        if price > 0:
+            source = "naver_mobile"
+
+    # ── Step 3: pykrx (네이버 둘 다 실패 시 — 장마감 후 확정치) ──
     if price <= 0:
         price = _get_kr_price_pykrx(stock_code)
         if price > 0:
             source = "pykrx"
 
-    # ── Step 3: yfinance (재무지표 + 가격 최종 보조) ──
+    # ── Step 4: yfinance (재무지표 + 가격 최종 보조) ──
     yf_fi   = None
     yf_info = {}
     for suffix in [".KS", ".KQ"]:
@@ -303,7 +350,8 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
                 yf_fi   = fi
                 yf_info = t.info
                 break
-        except Exception:
+        except Exception as e:
+            print(f"[yfinance_price] {stock_code}{suffix} 실패: {e}", flush=True)
             continue
 
     print(f"[KR price] {stock_code} source={source or 'FAILED'} price={price}", flush=True)
