@@ -1123,9 +1123,10 @@ def _detect_stocks_in_text(text: str) -> list[str]:
     from stock_research import KR_STOCK_MAP
 
     found = []
+    text_upper = text.upper()   # "sk하이닉스" 같은 소문자 입력도 매칭되도록 대소문자 무시
     # 한국 주식: 사전 기반
     for name in KR_STOCK_MAP:
-        if name in text and name not in found:
+        if name.upper() in text_upper and name not in found:
             found.append(name)
     # 짧은 종목명이 다른 매칭 종목명의 부분 문자열이면 제거
     # 예) "SK하이닉스 알려줘" → "SK"(SK㈜, 별개 종목)가 "SK하이닉스"의 부분으로 함께 매칭되는 것 방지
