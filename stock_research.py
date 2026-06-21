@@ -237,10 +237,12 @@ def _get_kr_price_naver(stock_code: str) -> dict:
         data  = res.json()
         areas = data.get("result", {}).get("areas", [])
         if not areas or not areas[0].get("datas"):
+            print(f"[naver_polling] {stock_code} 빈 응답: {data}", flush=True)
             return {}
         d     = areas[0]["datas"][0]
         price = float(d.get("nv", 0) or 0)
         if price <= 0:
+            print(f"[naver_polling] {stock_code} price<=0: {d}", flush=True)
             return {}
         pct_raw = d.get("cr")
         if pct_raw in (None, ""):
@@ -308,7 +310,7 @@ def _get_kr_price_pykrx(stock_code: str) -> float:
 def get_kr_stock_realtime(stock_code: str) -> dict:
     """
     한국 주식 실시간 데이터 조회.
-    가격: 네이버 polling → 네이버 모바일 → pykrx(장마감 확정치) → yfinance 순.
+    가격: 네이버 polling → pykrx(장마감 확정치) → yfinance 순.
     재무지표: yfinance.
     """
     print(f"[KR price] {stock_code} 조회 시작", flush=True)
@@ -318,20 +320,16 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
     price = naver.get("price", 0) or 0
     source = "naver_polling" if price > 0 else ""
 
-    # ── Step 2: 네이버 모바일 (polling 차단 시 2차 소스) ──
-    if price <= 0:
-        naver = _get_kr_price_naver_mobile(stock_code)
-        price = naver.get("price", 0) or 0
-        if price > 0:
-            source = "naver_mobile"
-
-    # ── Step 3: pykrx (네이버 둘 다 실패 시 — 장마감 후 확정치) ──
+    # ── Step 2: pykrx (네이버 실패 시 — 장마감 후 확정치) ──
+    # 네이버 모바일 API(_get_kr_price_naver_mobile)는 응답 스키마 파싱이 검증되지 않아
+    # 실제 가격과 10배 이상 차이나는 잘못된 값을 반환한 적이 있어 체인에서 제외함.
+    # 진단 시에는 /debugprice 명령으로 별도 호출 가능.
     if price <= 0:
         price = _get_kr_price_pykrx(stock_code)
         if price > 0:
             source = "pykrx"
 
-    # ── Step 4: yfinance (재무지표 + 가격 최종 보조) ──
+    # ── Step 3: yfinance (재무지표 + 가격 최종 보조) ──
     yf_fi   = None
     yf_info = {}
     for suffix in [".KS", ".KQ"]:

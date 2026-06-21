@@ -1439,6 +1439,45 @@ async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 퀀트 분석 트리거 실패 (status={resp.status_code})")
 
 
+# ── /debugprice (가격 소스 진단, 텔레그램으로 직접 결과 회신) ──
+
+async def cmd_debugprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+    code = (context.args[0] if context.args else "000660").strip()
+
+    from stock_research import _get_kr_price_naver, _get_kr_price_naver_mobile, _get_kr_price_pykrx
+
+    lines = [f"🔍 가격 소스 진단: {code}"]
+
+    try:
+        naver = _get_kr_price_naver(code)
+        lines.append(f"naver_polling: {naver or 'EMPTY'}")
+    except Exception as e:
+        lines.append(f"naver_polling: 예외 — {e}")
+
+    try:
+        mobile = _get_kr_price_naver_mobile(code)
+        lines.append(f"naver_mobile: {mobile or 'EMPTY'}")
+    except Exception as e:
+        lines.append(f"naver_mobile: 예외 — {e}")
+
+    try:
+        pykrx_price = _get_kr_price_pykrx(code)
+        lines.append(f"pykrx: {pykrx_price}")
+    except Exception as e:
+        lines.append(f"pykrx: 예외 — {e}")
+
+    try:
+        yf_t = yf.Ticker(f"{code}.KS")
+        yf_price = yf_t.fast_info.last_price
+        lines.append(f"yfinance(.KS): {yf_price}")
+    except Exception as e:
+        lines.append(f"yfinance(.KS): 예외 — {e}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 # ── 봇 실행 ───────────────────────────────────────────────────
 
 from aiohttp import web as _web
@@ -1453,6 +1492,7 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("quant_us",  cmd_quant_us))
     app.add_handler(CommandHandler("alert",     cmd_alert))
     app.add_handler(CommandHandler("econ",      cmd_econ))
+    app.add_handler(CommandHandler("debugprice", cmd_debugprice))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.job_queue.run_daily(
