@@ -222,41 +222,39 @@ def fetch_news(query: str = None, max_articles: int = 9):
         return [f"뉴스 수집 실패: {e}"]
 
 
-def fetch_earnings_news(max_articles: int = 5):
-    """
-    기업 실적 뉴스를 '최신순(publishedAt)'으로 별도 수집.
-    매크로 뉴스(relevancy 정렬)에 묻혀서 누락되는 것을 방지.
-    최근 16시간 이내로 좁혀서 간밤 발표분을 우선 포착.
-    """
+# 한국 증시(특히 반도체)에 영향이 큰 주요 기업 — 실적 시즌에 일반 키워드
+# 경쟁에 밀려 누락되지 않도록 회사명을 명시적으로 검색
+_BELLWETHER_COMPANIES = [
+    "Micron", "Nvidia", "TSMC", "Broadcom", "AMD", "ASML",
+    "Oracle", "FedEx", "Apple", "Microsoft", "Amazon",
+    "Google", "Alphabet", "Meta", "Tesla", "Qualcomm",
+]
+
+_NEWS_SKIP_KEYWORDS = [
+    "morning briefing", "daily briefing", "news briefing",
+    "what to know", "what's happening", "here's what",
+    "today in", "this week in", "roundup",
+]
+
+_NEWS_TRUSTED_DOMAINS = (
+    "reuters.com,bloomberg.com,wsj.com,ft.com,"
+    "cnbc.com,marketwatch.com,barrons.com,"
+    "seekingalpha.com,apnews.com,finance.yahoo.com"
+)
+
+
+def _newsapi_search(query: str, since_iso: str, sort_by: str, page_size: int) -> list[str]:
+    """NewsAPI /v2/everything 공용 호출 헬퍼"""
     if not NEWS_API_KEY:
         return []
-
-    query = (
-        "earnings OR \"quarterly results\" OR \"beats estimates\" "
-        "OR \"misses estimates\" OR guidance OR \"earnings report\" "
-        "OR \"earnings call\" OR revenue OR \"earnings surprise\""
-    )
-    trusted_domains = (
-        "reuters.com,bloomberg.com,wsj.com,ft.com,"
-        "cnbc.com,marketwatch.com,barrons.com,"
-        "seekingalpha.com,apnews.com,finance.yahoo.com"
-    )
-    skip_keywords = [
-        "morning briefing", "daily briefing", "news briefing",
-        "what to know", "what's happening", "here's what",
-        "today in", "this week in", "roundup",
-    ]
-
-    # 최근 16시간 — 미국 마감 후~아시아 개장 전 발표분을 정확히 포착
-    since = (datetime.now(timezone.utc) - timedelta(hours=16)).strftime("%Y-%m-%dT%H:%M:%S")
     url = (
         "https://newsapi.org/v2/everything"
         f"?q={requests.utils.quote(query)}"
-        f"&domains={trusted_domains}"
-        f"&from={since}"
+        f"&domains={_NEWS_TRUSTED_DOMAINS}"
+        f"&from={since_iso}"
         "&language=en"
-        "&sortBy=publishedAt"   # 관련도 대신 최신순 — 시급한 실적뉴스 우선
-        f"&pageSize={max_articles}"
+        f"&sortBy={sort_by}"
+        f"&pageSize={page_size}"
         f"&apiKey={NEWS_API_KEY}"
     )
     try:
@@ -267,13 +265,56 @@ def fetch_earnings_news(max_articles: int = 5):
         results = []
         for a in data.get("articles", []):
             title = a.get("title", "")
-            if not title or any(kw in title.lower() for kw in skip_keywords):
+            if not title or any(kw in title.lower() for kw in _NEWS_SKIP_KEYWORDS):
                 continue
             source = a.get("source", {}).get("name", "")
             results.append(f"{title} ({source})")
         return results
     except Exception:
         return []
+
+
+def fetch_earnings_news(max_articles: int = 6):
+    """
+    기업 실적 뉴스를 '최신순(publishedAt)'으로 별도 수집.
+    매크로 뉴스(relevancy 정렬)에 묻혀서 누락되는 것을 방지.
+    최근 16시간 이내로 좁혀서 간밤 발표분을 우선 포착.
+
+    1순위: 반도체/빅테크 등 한국 증시 영향력 큰 기업 — 회사명 명시 검색으로
+          실적 시즌 일반 키워드 경쟁에서도 절대 누락되지 않도록 보장.
+    2순위: 일반 실적 키워드로 나머지 슬롯 채움.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(hours=16)).strftime("%Y-%m-%dT%H:%M:%S")
+    earnings_kw = (
+        "(earnings OR \"quarterly results\" OR \"beats estimates\" "
+        "OR \"misses estimates\" OR guidance OR revenue)"
+    )
+
+    seen, results = set(), []
+
+    # 1순위: 주요 기업 명시 검색
+    bellwether_query = "(" + " OR ".join(_BELLWETHER_COMPANIES) + ") AND " + earnings_kw
+    for h in _newsapi_search(bellwether_query, since, "publishedAt", 5):
+        key = h[:40]
+        if key not in seen:
+            seen.add(key)
+            results.append(h)
+
+    # 2순위: 일반 실적 키워드로 나머지 슬롯 채움
+    if len(results) < max_articles:
+        general_query = (
+            "earnings OR \"quarterly results\" OR \"beats estimates\" "
+            "OR \"misses estimates\" OR guidance OR \"earnings report\" "
+            "OR \"earnings call\" OR revenue OR \"earnings surprise\""
+        )
+        remaining = max_articles - len(results)
+        for h in _newsapi_search(general_query, since, "publishedAt", remaining):
+            key = h[:40]
+            if key not in seen and len(results) < max_articles:
+                seen.add(key)
+                results.append(h)
+
+    return results
 
 
 def translate_headlines_to_korean(headlines: list) -> list:
