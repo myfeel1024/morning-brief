@@ -222,13 +222,28 @@ def fetch_news(query: str = None, max_articles: int = 9):
         return [f"뉴스 수집 실패: {e}"]
 
 
-# 한국 증시(특히 반도체)에 영향이 큰 주요 기업 — 실적 시즌에 일반 키워드
-# 경쟁에 밀려 누락되지 않도록 회사명을 명시적으로 검색
-_BELLWETHER_COMPANIES = [
-    "Micron", "Nvidia", "TSMC", "Broadcom", "AMD", "ASML",
-    "Oracle", "FedEx", "Apple", "Microsoft", "Amazon",
-    "Google", "Alphabet", "Meta", "Tesla", "Qualcomm",
+# S&P500 시가총액 상위 대형주 — 실적 시즌에 일반 키워드 경쟁에 밀려
+# 누락되지 않도록 회사명을 명시적으로 검색 (섹터 전반 커버)
+_SP500_MEGACAP_WATCHLIST = [
+    # 빅테크·반도체 (한국 증시 영향 특히 큼)
+    "Apple", "Microsoft", "Nvidia", "Alphabet", "Amazon", "Meta", "Tesla",
+    "Broadcom", "AMD", "Qualcomm", "Micron", "TSMC", "ASML", "Oracle",
+    "Cisco", "IBM", "Intel", "Adobe", "Salesforce", "Netflix",
+    # 금융
+    "Berkshire Hathaway", "JPMorgan", "Visa", "Mastercard",
+    "Bank of America", "Goldman Sachs", "Wells Fargo",
+    # 헬스케어
+    "UnitedHealth", "Eli Lilly", "Johnson & Johnson", "AbbVie", "Merck",
+    # 소비재·유통·산업재·에너지
+    "Walmart", "Costco", "Home Depot", "Procter & Gamble", "Coca-Cola",
+    "Exxon Mobil", "Chevron", "Boeing", "Caterpillar", "FedEx",
 ]
+
+
+def _chunked(items: list, size: int):
+    """리스트를 size 단위로 분할 (NewsAPI 쿼리 길이 제한 회피)"""
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 _NEWS_SKIP_KEYWORDS = [
     "morning briefing", "daily briefing", "news briefing",
@@ -274,14 +289,15 @@ def _newsapi_search(query: str, since_iso: str, sort_by: str, page_size: int) ->
         return []
 
 
-def fetch_earnings_news(max_articles: int = 6):
+def fetch_earnings_news(max_articles: int = 8):
     """
     기업 실적 뉴스를 '최신순(publishedAt)'으로 별도 수집.
     매크로 뉴스(relevancy 정렬)에 묻혀서 누락되는 것을 방지.
     최근 16시간 이내로 좁혀서 간밤 발표분을 우선 포착.
 
-    1순위: 반도체/빅테크 등 한국 증시 영향력 큰 기업 — 회사명 명시 검색으로
+    1순위: S&P500 시가총액 상위 대형주 — 회사명 명시 검색으로
           실적 시즌 일반 키워드 경쟁에서도 절대 누락되지 않도록 보장.
+          (NewsAPI 쿼리 길이 제한 때문에 12개씩 묶어서 분할 검색)
     2순위: 일반 실적 키워드로 나머지 슬롯 채움.
     """
     since = (datetime.now(timezone.utc) - timedelta(hours=16)).strftime("%Y-%m-%dT%H:%M:%S")
@@ -292,13 +308,17 @@ def fetch_earnings_news(max_articles: int = 6):
 
     seen, results = set(), []
 
-    # 1순위: 주요 기업 명시 검색
-    bellwether_query = "(" + " OR ".join(_BELLWETHER_COMPANIES) + ") AND " + earnings_kw
-    for h in _newsapi_search(bellwether_query, since, "publishedAt", 5):
-        key = h[:40]
-        if key not in seen:
-            seen.add(key)
-            results.append(h)
+    # 1순위: S&P500 대형주 명시 검색 (배치 분할)
+    for batch in _chunked(_SP500_MEGACAP_WATCHLIST, 12):
+        if len(results) >= max_articles:
+            break
+        names = " OR ".join(f'"{n}"' if " " in n else n for n in batch)
+        query = f"({names}) AND {earnings_kw}"
+        for h in _newsapi_search(query, since, "publishedAt", 4):
+            key = h[:40]
+            if key not in seen and len(results) < max_articles:
+                seen.add(key)
+                results.append(h)
 
     # 2순위: 일반 실적 키워드로 나머지 슬롯 채움
     if len(results) < max_articles:
