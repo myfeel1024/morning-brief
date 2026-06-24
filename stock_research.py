@@ -7,6 +7,7 @@
 import re
 import requests
 import urllib.parse
+from datetime import datetime, timedelta
 from xml.etree import ElementTree as ET
 import yfinance as yf
 
@@ -79,54 +80,56 @@ def get_google_news(query: str, n: int = 6) -> list[str]:
 
 # ── 네이버 금융 증권사 리포트 스크래핑 ───────────────────────
 
-def get_naver_analyst_reports(stock_code: str, n: int = 5) -> list[dict]:
-    """네이버 금융 증권사 리포트 및 목표주가 수집"""
-    if not BS4_OK or not stock_code:
-        return []
+def _extract_target_price(preview: str) -> str:
+    """리포트 미리보기 본문에서 목표주가 추출. '380만원' / '1,650,000원' 형식 모두 지원."""
+    if not preview:
+        return ""
+    text = preview.replace("&nbsp;", " ")
+    m = re.search(r"목표\S{0,3}가\S{0,2}\s*([\d,]+)\s*만\s*원", text)
+    if m:
+        return f"{int(m.group(1).replace(',', '')) * 10000:,}원"
+    m = re.search(r"목표\S{0,3}가\S{0,2}\s*([\d,]{4,})\s*원", text)
+    if m:
+        return f"{int(m.group(1).replace(',', '')):,}원"
+    return ""
 
-    url = f"https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode={stock_code}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": "https://finance.naver.com",
-    }
+
+def get_naver_analyst_reports(stock_code: str, n: int = 5, days: int = 90) -> list[dict]:
+    """네이버 증권 모바일 리서치 API에서 최근 증권사 리포트 및 목표주가 수집.
+
+    예전엔 finance.naver.com의 데스크톱 리서치 표를 스크래핑했는데, 그 표의 마지막 컬럼은
+    목표가가 아니라 조회수였다(둘 다 비슷한 크기의 숫자라 오랫동안 들키지 않았음). 목표가는
+    표에 없고 리포트 본문에만 텍스트로 적혀 있어서, 종목별 모바일 리서치 API
+    (m.stock.naver.com/api/research/stock/{code})의 previewContent에서 정규식으로 추출한다.
+    """
+    if not stock_code:
+        return []
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        res.encoding = "utf-8"
-        soup = BeautifulSoup(res.text, "html.parser")
+        url = f"https://m.stock.naver.com/api/research/stock/{stock_code}?page=1&pageSize=30"
+        res = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": f"https://m.stock.naver.com/domestic/stock/{stock_code}/research",
+            "Accept": "application/json, text/plain, */*",
+        })
+        if res.status_code != 200:
+            return []
+        items = res.json()
+        cutoff = datetime.now() - timedelta(days=days)
 
         reports = []
-        for row in soup.select("tr"):
-            cols = row.find_all("td")
-            if len(cols) < 3:
-                continue
-            texts = [c.get_text(strip=True) for c in cols]
-            title_a = row.find("a")
-            title = title_a.get_text(strip=True) if title_a else ""
-            if not title or len(title) < 4:
-                continue
-
-            target, opinion, firm, date = "", "", "", ""
-            for text in texts:
-                if re.match(r"^[\d,]+원?$", text) and len(text) >= 5:
-                    target = text if "원" in text else text + "원"
-                elif text in ["매수", "중립", "매도", "BUY", "HOLD", "비중확대",
-                               "시장수익률상회", "아웃퍼폼", "Outperform"]:
-                    opinion = text
-                elif re.match(r"\d{4}\.\d{2}\.\d{2}", text):
-                    date = text
-                elif (len(text) >= 2 and len(text) <= 15
-                      and text != title
-                      and not re.match(r"[\d,]+", text)
-                      and not firm):
-                    firm = text
-
+        for it in items:
+            write_date = it.get("writeDate", "")
+            try:
+                if datetime.strptime(write_date, "%Y-%m-%d") < cutoff:
+                    continue
+            except ValueError:
+                pass
             reports.append({
-                "title": title[:60],
-                "firm": firm,
-                "target_price": target,
-                "opinion": opinion,
-                "date": date,
+                "title": (it.get("title") or "")[:60],
+                "firm": it.get("brokerName", ""),
+                "target_price": _extract_target_price(it.get("previewContent", "")),
+                "opinion": "",
+                "date": write_date,
             })
             if len(reports) >= n:
                 break
@@ -220,6 +223,80 @@ def fetch_korean_news(n: int = 8) -> list[str]:
 
 # ── 한국 주식 실시간 데이터 (yfinance .KS/.KQ) ───────────────
 
+def _get_kr_price_naver(stock_code: str) -> dict:
+    """네이버 금융 실시간 polling API — 장중에도 수 초~수십 초 지연 수준.
+    pykrx(장마감 후 확정치)·yfinance(15~20분 지연)보다 장중 정확도가 높음.
+    """
+    try:
+        url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{stock_code}"
+        res = requests.get(url, timeout=5, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://finance.naver.com/",
+            "Accept": "application/json, text/plain, */*",
+        })
+        if res.status_code != 200:
+            print(f"[naver_polling] {stock_code} HTTP {res.status_code}", flush=True)
+            return {}
+        data  = res.json()
+        datas = data.get("datas", [])
+        if not datas:
+            print(f"[naver_polling] {stock_code} 빈 응답: {data}", flush=True)
+            return {}
+        d = datas[0]
+        price_raw = d.get("closePrice", "")
+        price = float(str(price_raw).replace(",", "")) if price_raw else 0.0
+        if price <= 0:
+            print(f"[naver_polling] {stock_code} price<=0: {d}", flush=True)
+            return {}
+        diff_raw = d.get("compareToPreviousClosePrice", "")
+        diff = float(str(diff_raw).replace(",", "")) if diff_raw not in (None, "") else None
+        sign = (d.get("compareToPreviousPrice") or {}).get("code", "")
+        if diff is not None and sign == "5" and diff > 0:
+            diff = -diff
+        pct_raw = d.get("fluctuationsRatio", "")
+        pct = float(pct_raw) if pct_raw not in (None, "") else None
+        if pct is not None and sign == "5" and pct > 0:
+            pct = -pct
+        prev = (price - diff) if diff is not None else None
+        return {"price": price, "prev": prev, "diff": diff, "pct": pct}
+    except Exception as e:
+        print(f"[naver_polling] {stock_code} 실패: {e}", flush=True)
+        return {}
+
+
+def _get_kr_price_naver_mobile(stock_code: str) -> dict:
+    """네이버 모바일 증권 API — polling API가 차단될 때의 2차 네이버 소스."""
+    try:
+        url = f"https://m.stock.naver.com/api/stock/{stock_code}/basic"
+        res = requests.get(url, timeout=5, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": f"https://m.stock.naver.com/domestic/stock/{stock_code}/total",
+            "Accept": "application/json, text/plain, */*",
+        })
+        if res.status_code != 200:
+            print(f"[naver_mobile] {stock_code} HTTP {res.status_code}", flush=True)
+            return {}
+        d = res.json()
+        price_raw = d.get("closePrice", "")
+        price = float(str(price_raw).replace(",", "")) if price_raw else 0.0
+        if price <= 0:
+            return {}
+        diff_raw = d.get("compareToPreviousClosePrice", "")
+        diff = float(str(diff_raw).replace(",", "")) if diff_raw not in (None, "") else None
+        sign = (d.get("compareToPreviousPrice") or {}).get("code", "")
+        if diff is not None and sign == "5" and diff > 0:
+            diff = -diff
+        pct_raw = d.get("fluctuationsRatio", "")
+        pct = float(pct_raw) if pct_raw not in (None, "") else None
+        if pct is not None and sign == "5" and pct > 0:
+            pct = -pct
+        prev = (price - diff) if diff is not None else None
+        return {"price": price, "prev": prev, "diff": diff, "pct": pct}
+    except Exception as e:
+        print(f"[naver_mobile] {stock_code} 실패: {e}", flush=True)
+        return {}
+
+
 def _get_kr_price_pykrx(stock_code: str) -> float:
     """pykrx로 한국 주식 현재가(당일 or 전일 종가) 조회."""
     try:
@@ -230,21 +307,38 @@ def _get_kr_price_pykrx(stock_code: str) -> float:
             df = krx.get_market_ohlcv_by_date(d, d, stock_code)
             if not df.empty:
                 return float(df["종가"].iloc[-1])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[pykrx_price] {stock_code} 실패: {e}", flush=True)
     return 0.0
 
 
 def get_kr_stock_realtime(stock_code: str) -> dict:
     """
     한국 주식 실시간 데이터 조회.
-    가격: pykrx(KRX 직접) 우선, yfinance 보조.
+    가격: 네이버 polling → 네이버 모바일 → pykrx(장마감 확정치) → yfinance 순.
     재무지표: yfinance.
     """
-    # ── Step 1: 현재가 (pykrx 우선) ──
-    price = _get_kr_price_pykrx(stock_code)
+    print(f"[KR price] {stock_code} 조회 시작", flush=True)
 
-    # ── Step 2: yfinance (재무지표 + 가격 보조) ──
+    # ── Step 1: 네이버 실시간 polling ──
+    naver = _get_kr_price_naver(stock_code)
+    price = naver.get("price", 0) or 0
+    source = "naver_polling" if price > 0 else ""
+
+    # ── Step 2: 네이버 모바일 (polling 실패 시 2차 소스) ──
+    if price <= 0:
+        naver = _get_kr_price_naver_mobile(stock_code)
+        price = naver.get("price", 0) or 0
+        if price > 0:
+            source = "naver_mobile"
+
+    # ── Step 3: pykrx (네이버 둘 다 실패 시 — 장마감 후 확정치) ──
+    if price <= 0:
+        price = _get_kr_price_pykrx(stock_code)
+        if price > 0:
+            source = "pykrx"
+
+    # ── Step 4: yfinance (재무지표 + 가격 최종 보조) ──
     yf_fi   = None
     yf_info = {}
     for suffix in [".KS", ".KQ"]:
@@ -258,21 +352,29 @@ def get_kr_stock_realtime(stock_code: str) -> dict:
                     yf_price = float(hist["Close"].iloc[-1])
             if yf_price and yf_price > 0:
                 if price <= 0:
-                    price = yf_price   # pykrx 실패 시 yfinance 사용
+                    price = yf_price   # 네이버·pykrx 모두 실패 시 사용
+                    source = "yfinance"
                 yf_fi   = fi
                 yf_info = t.info
                 break
-        except Exception:
+        except Exception as e:
+            print(f"[yfinance_price] {stock_code}{suffix} 실패: {e}", flush=True)
             continue
+
+    print(f"[KR price] {stock_code} source={source or 'FAILED'} price={price}", flush=True)
 
     if not price or price <= 0:
         return {}
 
-    prev   = (yf_fi.previous_close if yf_fi else None)
     result = {"현재가": f"{price:,.0f}원"}
 
-    # 등락
-    if prev and prev > 0:
+    # 등락 — 네이버 실시간 데이터 우선, 없으면 yfinance 전일종가로 계산
+    if naver.get("diff") is not None and naver.get("pct") is not None:
+        diff, pct = naver["diff"], naver["pct"]
+        arrow = "▲" if diff >= 0 else "▼"
+        result["등락"] = f"{arrow} {abs(diff):,.0f}원 ({pct:+.2f}%)"
+    elif yf_fi and yf_fi.previous_close and yf_fi.previous_close > 0:
+        prev  = yf_fi.previous_close
         diff  = price - prev
         pct   = diff / prev * 100
         arrow = "▲" if diff >= 0 else "▼"
@@ -413,9 +515,13 @@ def research_stock(stock_name: str) -> str:
                     if r["target_price"]:
                         try:
                             tp = float(r["target_price"].replace(",", "").replace("원", ""))
-                            # 현재가 대비 5배 초과 목표주가는 스크래핑 오류로 제외
-                            if current_price > 0 and tp > current_price * 5:
-                                r["target_price"] = ""
+                            # 현재가 대비 5배 초과 또는 1/5 미만 목표주가는 액면분할·급등 등으로
+                            # 시점이 어긋난 과거 리포트일 가능성이 높아 upside 계산 없이 표시만
+                            implausible = current_price > 0 and (
+                                tp > current_price * 5 or tp < current_price * 0.2
+                            )
+                            if implausible:
+                                line += f" | 목표주가 {r['target_price']} (※시점 불일치로 upside 계산 제외)"
                             else:
                                 upside = (tp - current_price) / current_price * 100 if current_price > 0 else 0
                                 line += f" | 목표주가 {r['target_price']} ({upside:+.1f}%)"

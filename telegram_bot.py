@@ -244,8 +244,13 @@ def format_macro(data: dict) -> str:
 
 # ── 외국인·기관 순매수 (pykrx) ───────────────────────────────
 
+_investor_flow_broken = False   # pykrx 투자자별 거래 API가 KRX 로그인을 요구해 실패하면 이후 호출 생략
+
 def get_investor_flow(stock_name: str) -> str:
     """최근 5거래일 외국인·기관 순매수 (한국 주식 전용). 실패 시 빈 문자열."""
+    global _investor_flow_broken
+    if _investor_flow_broken:
+        return ""
     try:
         from pykrx import stock as pk
         from stock_research import get_kr_stock_code
@@ -256,6 +261,8 @@ def get_investor_flow(stock_name: str) -> str:
         start = (datetime.now() - timedelta(days=14)).strftime("%Y%m%d")
         df = pk.get_market_trading_value_by_investor(start, end, code)
         if df is None or df.empty:
+            # pykrx 내부에서 KRX 로그인 요구 등으로 빈 결과만 돌려주는 경우도 동일 처리
+            _investor_flow_broken = True
             return ""
         df = df.tail(5)
         foreign     = df.get("외국인합계", df.get("외국인", None))
@@ -267,7 +274,9 @@ def get_investor_flow(stock_name: str) -> str:
         f_str = f"{'매수' if f_val >= 0 else '매도'} {abs(f_val):.0f}억"
         i_str = f"{'매수' if i_val >= 0 else '매도'} {abs(i_val):.0f}억"
         return f"[최근5일 수급] 외국인 {f_str} / 기관 {i_str}"
-    except Exception:
+    except Exception as e:
+        print(f"[investor_flow] 비활성화 (사유: {e})", flush=True)
+        _investor_flow_broken = True
         return ""
 
 
@@ -399,17 +408,18 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = await update.message.reply_text("⏳ 현재 시황 분석 중...")
 
-    macro      = get_macro_context()
-    macro_text = format_macro(macro)
-    news_list  = fetch_recent_news()
-    kr_news    = fetch_korean_news(n=5)
-    news_text  = (
-        "[해외 뉴스]\n" + "\n".join(news_list[:4])
-        + "\n\n[국내 뉴스]\n" + "\n".join(kr_news)
-        if (news_list or kr_news) else "뉴스 없음"
-    )
+    def _build_market_reply() -> tuple[str, str]:
+        macro      = get_macro_context()
+        macro_text = format_macro(macro)
+        news_list  = fetch_recent_news()
+        kr_news    = fetch_korean_news(n=5)
+        news_text  = (
+            "[해외 뉴스]\n" + "\n".join(news_list[:4])
+            + "\n\n[국내 뉴스]\n" + "\n".join(kr_news)
+            if (news_list or kr_news) else "뉴스 없음"
+        )
 
-    prompt = f"""당신은 한국 주식시장 전문 애널리스트입니다.
+        prompt = f"""당신은 한국 주식시장 전문 애널리스트입니다.
 아래 현재 시장 데이터와 해외·국내 뉴스를 모두 반영하여 지금 이 순간의 시황을 분석해주세요.
 
 [현재 시장 지표]
@@ -424,10 +434,24 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ③ 코스피 투자자 관점의 시사점
 ④ 지금 당장 주의할 리스크"""
 
-    reply_text = claude().messages.create(
-        model="claude-sonnet-4-6", max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}]
-    ).content[0].text
+        reply_text = claude().messages.create(
+            model="claude-sonnet-4-6", max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=60,
+        ).content[0].text
+        return macro_text, reply_text
+
+    try:
+        loop = asyncio.get_event_loop()
+        macro_text, reply_text = await asyncio.wait_for(
+            loop.run_in_executor(None, _build_market_reply), timeout=90,
+        )
+    except asyncio.TimeoutError:
+        await msg.edit_text("❌ 시황 분석 시간 초과 (90초). 잠시 후 다시 시도해주세요.")
+        return
+    except Exception as e:
+        await msg.edit_text(f"❌ 오류: {e}")
+        return
 
     now = datetime.now().strftime("%Y/%m/%d %H:%M")
     full = (
@@ -815,67 +839,68 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await tg_file.download_to_drive(str(tmp_path))
 
     img_data, mime_type = image_to_base64(str(tmp_path))
-    macro      = get_macro_context()
-    macro_text = format_macro(macro)
-    client     = claude()
 
-    # ── Step 1: 이미지 유형 판별 ──
-    detect = client.messages.create(
-        model="claude-sonnet-4-6", max_tokens=512,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {
-                    "type": "base64", "media_type": mime_type, "data": img_data
-                }},
-                {"type": "text", "text": (
-                    "이 이미지의 유형을 판별하고 필요한 정보를 추출하세요.\n"
-                    "유형:\n"
-                    "- portfolio: 주식 보유종목/잔고 화면\n"
-                    "- chart: 주식/지수 차트 화면\n"
-                    "- other: 기타\n\n"
-                    "JSON만 응답 (설명 없이):\n"
-                    '{"type":"portfolio"|"chart"|"other",'
-                    '"stocks":["종목1",...],'
-                    '"chart_stock":"종목명 (chart일 때)",'
-                    '"chart_period":"기간 (chart일 때, 예: 3개월)",'
-                    '"indicators":"보이는 지표 (chart일 때, 예: 일목균형표,MACD,볼린저밴드)",'
-                    '"bb_position":"볼린저밴드 위치 (상단근처/중간/하단근처/하단이탈/없음)"}'
-                )}
-            ]
-        }]
-    )
+    def _process_image() -> tuple[str, str]:
+        """블로킹 네트워크 호출(매크로/리서치/Claude) 묶음 — executor에서 실행. (img_type, reply) 반환."""
+        macro      = get_macro_context()
+        macro_text = format_macro(macro)
+        client     = claude()
 
-    try:
-        raw      = detect.content[0].text.strip().replace("```json","").replace("```","")
-        detected = json.loads(raw)
-    except Exception:
-        detected = {"type": "other", "stocks": [], "chart_stock": "", "indicators": "", "bb_position": "없음"}
+        # ── Step 1: 이미지 유형 판별 ──
+        detect = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=512,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": mime_type, "data": img_data
+                    }},
+                    {"type": "text", "text": (
+                        "이 이미지의 유형을 판별하고 필요한 정보를 추출하세요.\n"
+                        "유형:\n"
+                        "- portfolio: 주식 보유종목/잔고 화면\n"
+                        "- chart: 주식/지수 차트 화면\n"
+                        "- other: 기타\n\n"
+                        "JSON만 응답 (설명 없이):\n"
+                        '{"type":"portfolio"|"chart"|"other",'
+                        '"stocks":["종목1",...],'
+                        '"chart_stock":"종목명 (chart일 때)",'
+                        '"chart_period":"기간 (chart일 때, 예: 3개월)",'
+                        '"indicators":"보이는 지표 (chart일 때, 예: 일목균형표,MACD,볼린저밴드)",'
+                        '"bb_position":"볼린저밴드 위치 (상단근처/중간/하단근처/하단이탈/없음)"}'
+                    )}
+                ]
+            }],
+            timeout=60,
+        )
 
-    img_type     = detected.get("type", "other")
-    stocks       = detected.get("stocks", [])
-    chart_stock  = detected.get("chart_stock", "")
-    indicators   = detected.get("indicators", "")
-    bb_position  = detected.get("bb_position", "없음")
+        try:
+            raw      = detect.content[0].text.strip().replace("```json","").replace("```","")
+            detected = json.loads(raw)
+        except Exception:
+            detected = {"type": "other", "stocks": [], "chart_stock": "", "indicators": "", "bb_position": "없음"}
 
-    # ── Step 2: 유형별 분석 ──
+        img_type     = detected.get("type", "other")
+        stocks       = detected.get("stocks", [])
+        chart_stock  = detected.get("chart_stock", "")
+        indicators   = detected.get("indicators", "")
+        bb_position  = detected.get("bb_position", "없음")
 
-    if img_type == "portfolio" and stocks:
-        # ── 증권사 리포트 + 뉴스 수집 (종목별) ──
-        await msg.edit_text("📊 증권사 리포트 및 뉴스 수집 중...")
-        research_parts = []
-        for s in stocks[:6]:
-            data = research_stock(s)
-            if data and "리서치 데이터 없음" not in data:
-                flow = get_investor_flow(s)
-                if flow:
-                    data += f"\n{flow}"
-                research_parts.append(data)
-        research_text = "\n\n".join(research_parts) if research_parts else "수집된 리서치 데이터 없음"
+        # ── Step 2: 유형별 분석 ──
 
-        await msg.edit_text("🤖 AI 종합 분석 중... (30~50초)")
+        if img_type == "portfolio" and stocks:
+            # ── 증권사 리포트 + 뉴스 수집 (종목별) ──
+            research_parts = []
+            for s in stocks[:6]:
+                data = research_stock(s)
+                if data and "리서치 데이터 없음" not in data:
+                    flow = get_investor_flow(s)
+                    if flow:
+                        data += f"\n{flow}"
+                    research_parts.append(data)
+            research_text = "\n\n".join(research_parts) if research_parts else "수집된 리서치 데이터 없음"
 
-        prompt = f"""당신은 한국 주식 전문 애널리스트이자 투자 비서입니다.
+            prompt = f"""당신은 한국 주식 전문 애널리스트이자 투자 비서입니다.
 보유 종목 화면을 보고, 아래 증권사 리포트·목표주가·뉴스 데이터를 바탕으로
 각 종목에 대한 심층 분석을 제공하세요.
 
@@ -907,77 +932,78 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - 각 종목 핵심 위주로 상세하게 작성 (종목당 400자 내외, 자동으로 여러 메시지에 나눠 전송됨)
 - 한국어로 작성."""
 
-        analysis = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=4000,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": mime_type, "data": img_data
-                    }},
-                    {"type": "text", "text": prompt}
-                ]
-            }]
-        )
+            analysis = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=4000,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": mime_type, "data": img_data
+                        }},
+                        {"type": "text", "text": prompt}
+                    ]
+                }],
+                timeout=90,
+            )
 
-        now   = datetime.now().strftime("%Y/%m/%d %H:%M")
-        reply = (
-            f"💼 *보유 종목 분석* `{now}`\n"
-            f"📋 종목: {', '.join(stocks)}\n"
-            f"{'─'*30}\n"
-            f"{analysis.content[0].text}"
-        )
+            now   = datetime.now().strftime("%Y/%m/%d %H:%M")
+            reply = (
+                f"💼 *보유 종목 분석* `{now}`\n"
+                f"📋 종목: {', '.join(stocks)}\n"
+                f"{'─'*30}\n"
+                f"{analysis.content[0].text}"
+            )
 
-    elif img_type == "chart":
-        # 차트 기술적 분석
-        stock_info = f"종목: {chart_stock}" if chart_stock else ""
-        ind_info   = f"확인된 지표: {indicators}" if indicators else ""
+        elif img_type == "chart":
+            # 차트 기술적 분석
+            stock_info = f"종목: {chart_stock}" if chart_stock else ""
+            ind_info   = f"확인된 지표: {indicators}" if indicators else ""
 
-        # 수급 데이터
-        flow_info = get_investor_flow(chart_stock) if chart_stock else ""
+            # 수급 데이터
+            flow_info = get_investor_flow(chart_stock) if chart_stock else ""
 
-        # BB: yfinance 실제 계산 (종목 인식된 경우) → 시각 감지 대체
-        bb_info = ""
-        if chart_stock and "볼린저밴드" in (indicators or ""):
-            try:
-                from stock_research import get_kr_stock_code
-                import yfinance as yf
-                import numpy as np
-                code = get_kr_stock_code(chart_stock)
-                yf_ticker = None
-                for sfx in [".KS", ".KQ"]:
-                    t = yf.Ticker(f"{code}{sfx}" if code else f"{chart_stock}{sfx}")
-                    hist = t.history(period="2mo", interval="1d")
-                    if len(hist) >= 20:
-                        yf_ticker = hist
-                        break
-                if yf_ticker is not None and len(yf_ticker) >= 20:
-                    closes = yf_ticker["Close"]
-                    ma20   = closes.rolling(20).mean().iloc[-1]
-                    std20  = closes.rolling(20).std().iloc[-1]
-                    bb_up  = ma20 + 2 * std20
-                    bb_dn  = ma20 - 2 * std20
-                    cur    = closes.iloc[-1]
-                    pct_b  = (cur - bb_dn) / (bb_up - bb_dn) if (bb_up - bb_dn) > 0 else 0.5
-                    if pct_b >= 0.8:
-                        bb_pos_str = "상단 근처"
-                    elif pct_b <= 0.2:
-                        bb_pos_str = "하단 근처 (과매도)"
-                    else:
-                        bb_pos_str = "중간 구간"
-                    bb_info = (
-                        f"[실시간 볼린저밴드 데이터 (20일, 2σ)]\n"
-                        f"BB 상단: {bb_up:,.0f}원 / BB 중간(MA20): {ma20:,.0f}원 / BB 하단: {bb_dn:,.0f}원\n"
-                        f"현재가: {cur:,.0f}원 / %B: {pct_b:.2f} → {bb_pos_str}\n"
-                        f"(이 수치를 분석의 기준으로 사용하고, 차트 시각 판단보다 우선 적용)"
-                    )
-            except Exception:
-                if bb_position and bb_position != "없음":
-                    bb_info = f"볼린저밴드 현재 위치(차트 시각 감지): {bb_position}"
-        elif bb_position and bb_position != "없음":
-            bb_info = f"볼린저밴드 현재 위치(차트 시각 감지): {bb_position}"
+            # BB: yfinance 실제 계산 (종목 인식된 경우) → 시각 감지 대체
+            bb_info = ""
+            if chart_stock and "볼린저밴드" in (indicators or ""):
+                try:
+                    from stock_research import get_kr_stock_code
+                    import yfinance as yf
+                    import numpy as np
+                    code = get_kr_stock_code(chart_stock)
+                    yf_ticker = None
+                    for sfx in [".KS", ".KQ"]:
+                        t = yf.Ticker(f"{code}{sfx}" if code else f"{chart_stock}{sfx}")
+                        hist = t.history(period="2mo", interval="1d")
+                        if len(hist) >= 20:
+                            yf_ticker = hist
+                            break
+                    if yf_ticker is not None and len(yf_ticker) >= 20:
+                        closes = yf_ticker["Close"]
+                        ma20   = closes.rolling(20).mean().iloc[-1]
+                        std20  = closes.rolling(20).std().iloc[-1]
+                        bb_up  = ma20 + 2 * std20
+                        bb_dn  = ma20 - 2 * std20
+                        cur    = closes.iloc[-1]
+                        pct_b  = (cur - bb_dn) / (bb_up - bb_dn) if (bb_up - bb_dn) > 0 else 0.5
+                        if pct_b >= 0.8:
+                            bb_pos_str = "상단 근처"
+                        elif pct_b <= 0.2:
+                            bb_pos_str = "하단 근처 (과매도)"
+                        else:
+                            bb_pos_str = "중간 구간"
+                        bb_info = (
+                            f"[실시간 볼린저밴드 데이터 (20일, 2σ)]\n"
+                            f"BB 상단: {bb_up:,.0f}원 / BB 중간(MA20): {ma20:,.0f}원 / BB 하단: {bb_dn:,.0f}원\n"
+                            f"현재가: {cur:,.0f}원 / %B: {pct_b:.2f} → {bb_pos_str}\n"
+                            f"(이 수치를 분석의 기준으로 사용하고, 차트 시각 판단보다 우선 적용)"
+                        )
+                except Exception:
+                    if bb_position and bb_position != "없음":
+                        bb_info = f"볼린저밴드 현재 위치(차트 시각 감지): {bb_position}"
+            elif bb_position and bb_position != "없음":
+                bb_info = f"볼린저밴드 현재 위치(차트 시각 감지): {bb_position}"
 
-        prompt = f"""당신은 기술적 분석 전문가입니다.
+            prompt = f"""당신은 기술적 분석 전문가입니다.
 이 차트를 세밀하게 분석하세요.
 
 {stock_info}
@@ -1032,45 +1058,63 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 한국어로 작성."""
 
-        analysis = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=4000,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": mime_type, "data": img_data
-                    }},
-                    {"type": "text", "text": prompt}
-                ]
-            }]
-        )
+            analysis = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=4000,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": mime_type, "data": img_data
+                        }},
+                        {"type": "text", "text": prompt}
+                    ]
+                }],
+                timeout=90,
+            )
 
-        now   = datetime.now().strftime("%Y/%m/%d %H:%M")
-        title = f"📈 차트 기술적 분석 ({now})"
-        if chart_stock:
-            title += f"\n종목: {chart_stock}"
-        reply = f"{title}\n{'─'*30}\n{analysis.content[0].text}"
+            now   = datetime.now().strftime("%Y/%m/%d %H:%M")
+            title = f"📈 차트 기술적 분석 ({now})"
+            if chart_stock:
+                title += f"\n종목: {chart_stock}"
+            reply = f"{title}\n{'─'*30}\n{analysis.content[0].text}"
 
-    else:
-        # 기타 이미지
-        analysis = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1024,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {
-                        "type": "base64", "media_type": mime_type, "data": img_data
-                    }},
-                    {"type": "text", "text": (
-                        f"이 이미지에서 투자/시장 관련 정보를 분석하세요.\n\n"
-                        f"현재 매크로 환경:\n{macro_text}\n\n"
-                        "투자 관련 정보가 없다면 이미지 내용을 요약해주세요.\n"
-                        "한국어로 작성."
-                    )}
-                ]
-            }]
+        else:
+            # 기타 이미지
+            analysis = client.messages.create(
+                model="claude-sonnet-4-6", max_tokens=1024,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {
+                            "type": "base64", "media_type": mime_type, "data": img_data
+                        }},
+                        {"type": "text", "text": (
+                            f"이 이미지에서 투자/시장 관련 정보를 분석하세요.\n\n"
+                            f"현재 매크로 환경:\n{macro_text}\n\n"
+                            "투자 관련 정보가 없다면 이미지 내용을 요약해주세요.\n"
+                            "한국어로 작성."
+                        )}
+                    ]
+                }],
+                timeout=60,
+            )
+            reply = f"🔍 *이미지 분석*\n\n{analysis.content[0].text}"
+
+        return img_type, reply
+
+    try:
+        loop = asyncio.get_event_loop()
+        img_type, reply = await asyncio.wait_for(
+            loop.run_in_executor(None, _process_image), timeout=150,
         )
-        reply = f"🔍 *이미지 분석*\n\n{analysis.content[0].text}"
+    except asyncio.TimeoutError:
+        tmp_path.unlink(missing_ok=True)
+        await msg.edit_text("❌ 이미지 분석 시간 초과 (150초). 잠시 후 다시 시도해주세요.")
+        return
+    except Exception as e:
+        tmp_path.unlink(missing_ok=True)
+        await msg.edit_text(f"❌ 이미지 분석 실패: {e}")
+        return
 
     tmp_path.unlink(missing_ok=True)
 
@@ -1114,10 +1158,14 @@ def _detect_stocks_in_text(text: str) -> list[str]:
     from stock_research import KR_STOCK_MAP
 
     found = []
+    text_upper = text.upper()   # "sk하이닉스" 같은 소문자 입력도 매칭되도록 대소문자 무시
     # 한국 주식: 사전 기반
     for name in KR_STOCK_MAP:
-        if name in text and name not in found:
+        if name.upper() in text_upper and name not in found:
             found.append(name)
+    # 짧은 종목명이 다른 매칭 종목명의 부분 문자열이면 제거
+    # 예) "SK하이닉스 알려줘" → "SK"(SK㈜, 별개 종목)가 "SK하이닉스"의 부분으로 함께 매칭되는 것 방지
+    found = [n for n in found if not any(n != other and n in other for other in found)]
     # 미국 주식: 한국어 이름 → 티커 변환 (실시간 가격 보장)
     for kr_name, ticker in _KR_TO_US.items():
         if kr_name in text and ticker not in found:
@@ -1201,57 +1249,71 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("💭 분석 중...")
 
-    # ── 매크로 & 뉴스 (해외 + 국내) ──
-    macro      = get_macro_context()
-    macro_text = format_macro(macro)
-    news_list  = fetch_recent_news(n=4)
-    kr_news    = fetch_korean_news(n=4)
-    news_text  = (
-        "[해외 뉴스]\n" + "\n".join(news_list)
-        + ("\n\n[국내 뉴스]\n" + "\n".join(kr_news) if kr_news else "")
-    )
-
-    # ── 종목 감지 → 실시간 데이터 + 증권사 리포트 ──
-    detected      = _detect_stocks_in_text(question)
-    research_text = ""
-    price_summary = ""   # 현재가 요약 (시스템 프롬프트 상단에 명시)
+    detected = _detect_stocks_in_text(question)
     if detected:
         await msg.edit_text(f"🔍 {', '.join(detected)} 데이터 수집 중...")
-        parts = []
-        for stock in detected:
-            data = research_stock(stock)
-            if data and "데이터 없음" not in data:
-                flow = get_investor_flow(stock)
-                if flow:
-                    data += f"\n{flow}"
-                parts.append(data)
-                # 현재가 추출 → 상단 명시용
-                for line in data.splitlines():
-                    if "현재가:" in line:
-                        price_summary += f"{stock} {line.strip()}\n"
-                        break
-        research_text = "\n\n".join(parts)
 
-    # ── 매수/매도 판단 여부 ──
-    is_buy_q = any(k in question for k in [
-        "사도", "살까", "매수", "사야", "지금", "들어가", "진입",
-        "팔아야", "팔까", "매도", "들고", "홀딩", "보유",
-    ])
-    verdict_guide = (
-        """매수/매도 판단:
+    history = _history(chat_id)
+
+    def _build_reply() -> str:
+        """블로킹 네트워크 호출(매크로/뉴스/종목 조회/Claude) 묶음 — executor에서 실행."""
+        # ── 매크로 & 뉴스 (해외 + 국내) ──
+        macro      = get_macro_context()
+        macro_text = format_macro(macro)
+        news_list  = fetch_recent_news(n=4)
+        kr_news    = fetch_korean_news(n=4)
+        news_text  = (
+            "[해외 뉴스]\n" + "\n".join(news_list)
+            + ("\n\n[국내 뉴스]\n" + "\n".join(kr_news) if kr_news else "")
+        )
+
+        # ── 종목 감지 → 실시간 데이터 + 증권사 리포트 ──
+        research_text = ""
+        price_summary = ""   # 현재가 요약 (시스템 프롬프트 상단에 명시)
+        if detected:
+            parts = []
+            for stock in detected:
+                data = research_stock(stock)
+                if data and "데이터 없음" not in data:
+                    flow = get_investor_flow(stock)
+                    if flow:
+                        data += f"\n{flow}"
+                    parts.append(data)
+                    # 현재가 추출 → 상단 명시용
+                    for line in data.splitlines():
+                        if "현재가:" in line:
+                            price_summary += f"{stock} {line.strip()}\n"
+                            break
+            research_text = "\n\n".join(parts)
+
+        # ── 매수/매도 판단 여부 ──
+        is_buy_q = any(k in question for k in [
+            "사도", "살까", "매수", "사야", "지금", "들어가", "진입",
+            "팔아야", "팔까", "매도", "들고", "홀딩", "보유",
+        ])
+        verdict_guide = (
+            """매수/매도 판단:
 - 증권가 컨센서스 (목표주가, upside %)
 - 52주 내 현재가 위치 (저점/고점 근접 여부)
 - PER/PBR 업종 대비 수준
 - 매크로 섹터 영향
 - 마지막에 반드시: ✅매수 적극 고려 / ⚠️신중 접근 / ❌현재 비추천"""
-        if (is_buy_q and detected) else
-        "질문의 핵심에 직접 답변하고 수치와 근거를 제시하세요."
-    )
+            if (is_buy_q and detected) else
+            "질문의 핵심에 직접 답변하고 수치와 근거를 제시하세요."
+        )
 
-    # ── 시스템 프롬프트 (매번 최신 매크로 반영) ──
-    system_prompt = f"""당신은 한국 주식/투자 전문 비서입니다.
+        # ── 시스템 프롬프트 (매번 최신 매크로 반영) ──
+        price_block = (
+            chr(10) + "[현재가 (이 수치를 기준으로 모든 원 단위 계산)]" + chr(10) + price_summary
+            if price_summary else
+            chr(10) + "[알림] 실시간 가격 데이터 조회에 실패했습니다. 가격을 추측해서 답변하지 말고, "
+            "가격이 필요한 질문에는 '현재가 조회에 실패했습니다. 잠시 후 다시 시도해주세요'라고 명확히 안내하세요." + chr(10)
+            if detected else ""
+        )
+
+        system_prompt = f"""당신은 한국 주식/투자 전문 비서입니다.
 이전 대화 맥락을 기억하고 이어서 답변하세요.
-{(chr(10) + "[현재가 (이 수치를 기준으로 모든 원 단위 계산)]" + chr(10) + price_summary) if price_summary else ""}
+{price_block}
 [현재 매크로 환경]
 {macro_text}
 
@@ -1265,22 +1327,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - 매수/매도 타점·지지선·목표가 언급 시 반드시 실제 주가(원) 계산해서 표기
   예) 현재가 200,000원 기준 "-3% 구간 → 약 194,000원", "20일선 지지 → 약 190,000원대"
   반드시 위 현재가를 기준으로 직접 계산하여 원 단위로 표기할 것. 퍼센트(%)만 쓰면 안 됨
-- 절대 사용자에게 현재가를 물어보지 말 것. 현재가는 위에 제공됨
+- 위에 현재가가 제공되지 않았다면 절대 가격을 추측하지 말 것 (위 [알림] 지침 따름)
+- 절대 사용자에게 현재가를 물어보지 말 것. 현재가가 제공된 경우 그것을 사용
 - 이전 대화에서 언급된 종목/주제가 있으면 자연스럽게 연결
 - 투자 결정은 본인 책임임을 마지막 한 줄에 언급
 - 텔레그램 일반 텍스트 메시지 규칙: 마크다운 헤더(#, ##, ###), 볼드(**), 기울임(*), 수평선(---), 표(|) 절대 사용 금지. 이모지 + 일반 텍스트로만 구성
 - 한국어, 800자 내외 (길면 자동으로 여러 메시지로 분할됨)"""
 
-    # ── 대화 히스토리 + 현재 질문으로 Claude 호출 ──
-    history  = _history(chat_id)
-    messages = history + [{"role": "user", "content": question}]
+        messages = history + [{"role": "user", "content": question}]
+        return claude().messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1800,
+            system=system_prompt,
+            messages=messages,
+            timeout=60,
+        ).content[0].text
 
-    reply = claude().messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1800,
-        system=system_prompt,
-        messages=messages,
-    ).content[0].text
+    try:
+        loop  = asyncio.get_event_loop()
+        reply = await asyncio.wait_for(loop.run_in_executor(None, _build_reply), timeout=90)
+    except asyncio.TimeoutError:
+        await msg.edit_text("❌ 응답 생성 시간 초과 (90초). 잠시 후 다시 시도해주세요.")
+        return
+    except Exception as e:
+        await msg.edit_text(f"❌ 오류: {e}")
+        return
 
     # ── 히스토리 저장 ──
     _save(chat_id, "user",      question)
@@ -1417,6 +1488,45 @@ async def cmd_quant(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 퀀트 분석 트리거 실패 (status={resp.status_code})")
 
 
+# ── /debugprice (가격 소스 진단, 텔레그램으로 직접 결과 회신) ──
+
+async def cmd_debugprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+    code = (context.args[0] if context.args else "000660").strip()
+
+    from stock_research import _get_kr_price_naver, _get_kr_price_naver_mobile, _get_kr_price_pykrx
+
+    lines = [f"🔍 가격 소스 진단: {code}"]
+
+    try:
+        naver = _get_kr_price_naver(code)
+        lines.append(f"naver_polling: {naver or 'EMPTY'}")
+    except Exception as e:
+        lines.append(f"naver_polling: 예외 — {e}")
+
+    try:
+        mobile = _get_kr_price_naver_mobile(code)
+        lines.append(f"naver_mobile: {mobile or 'EMPTY'}")
+    except Exception as e:
+        lines.append(f"naver_mobile: 예외 — {e}")
+
+    try:
+        pykrx_price = _get_kr_price_pykrx(code)
+        lines.append(f"pykrx: {pykrx_price}")
+    except Exception as e:
+        lines.append(f"pykrx: 예외 — {e}")
+
+    try:
+        yf_t = yf.Ticker(f"{code}.KS")
+        yf_price = yf_t.fast_info.last_price
+        lines.append(f"yfinance(.KS): {yf_price}")
+    except Exception as e:
+        lines.append(f"yfinance(.KS): 예외 — {e}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 # ── 봇 실행 ───────────────────────────────────────────────────
 
 from aiohttp import web as _web
@@ -1431,6 +1541,7 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("quant_us",  cmd_quant_us))
     app.add_handler(CommandHandler("alert",     cmd_alert))
     app.add_handler(CommandHandler("econ",      cmd_econ))
+    app.add_handler(CommandHandler("debugprice", cmd_debugprice))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.job_queue.run_daily(
