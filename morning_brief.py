@@ -312,7 +312,8 @@ def translate_headlines_to_korean(headlines: list) -> list:
 
 # ── 3. Claude AI 분석 ─────────────────────────────────────────
 
-def analyze_with_claude(market_data: dict, news_list: list, portfolio: list = None):
+def analyze_with_claude(market_data: dict, news_list: list,
+                        earnings_list: list = None, portfolio: list = None):
     """Claude API로 시황 분석 및 코스피 전략 생성"""
     if not ANTHROPIC_API_KEY:
         return "⚠️ Anthropic API 키 미설정 — .env 파일에 ANTHROPIC_API_KEY를 입력하세요."
@@ -324,7 +325,8 @@ def analyze_with_claude(market_data: dict, news_list: list, portfolio: list = No
         f"  {k}: {v['price']:.2f} ({'+' if v['pct']>=0 else ''}{v['pct']:.2f}%)"
         for k, v in market_data.items()
     )
-    news_text = "\n".join(news_list[:12])   # 실적+매크로 뉴스 모두 포함되도록 확대
+    news_text     = "\n".join(news_list[:9])              # 매크로/지정학 뉴스
+    earnings_text = "\n".join(earnings_list[:5]) if earnings_list else "특이 실적 발표 없음"
 
     portfolio_section = ""
     if portfolio:
@@ -340,8 +342,11 @@ def analyze_with_claude(market_data: dict, news_list: list, portfolio: list = No
 [간밤 미국 시장 데이터]
 {market_text}
 
-[주요 뉴스 헤드라인]
+[매크로·지정학 뉴스 헤드라인]
 {news_text}
+
+[최근 16시간 내 기업 실적 발표 뉴스]
+{earnings_text}
 {portfolio_section}
 
 아래 형식으로 한국어로 작성하세요 (텔레그램 전송용, 총 500자 내외):
@@ -351,10 +356,12 @@ def analyze_with_claude(market_data: dict, news_list: list, portfolio: list = No
    - 미 10년물 국채금리 수준과 방향 (반드시 포함)
    - 달러/원 환율 영향
    - 유가·원자재 이슈 (해당 시)
-③ 주요 기업 실적 (어닝 서프라이즈/쇼크 있으면 반드시 언급)
+③ 주요 기업 실적 (위 [기업 실적 발표 뉴스]만 근거로 작성. 어닝 서프라이즈/쇼크 있으면 반드시 언급. 특이사항 없으면 "특이 실적 발표 없음"이라고만 짧게 적기)
 ④ 주목 섹터 (코스피 관점에서 오늘 강세/약세 예상 섹터)
 ⑤ 오늘의 코스피 전략 한 줄
 ⑥ 리스크 요인 (있다면)
+
+[중요] ③번에서 다룬 기업 실적 내용은 ①②④⑤⑥ 다른 항목에서 절대 반복하지 마세요. 실적 관련 내용은 오직 ③번에서만 다루세요.
 
 [필수 형식 규칙 — 반드시 준수]
 - #, ##, ### 같은 마크다운 헤더 절대 사용 금지
@@ -552,17 +559,17 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
     macro_news    = fetch_news()                  # 매크로 뉴스 (relevancy 정렬)
     earnings_news = fetch_earnings_news()          # 실적 뉴스 (최신순, 최근 16시간)
 
-    # 중복 제거하며 합치기 (실적 뉴스를 앞쪽에 배치해 누락 방지)
-    seen, news_list = set(), []
-    for h in earnings_news + macro_news:
-        key = h[:40]   # 헤드라인 앞부분으로 간단 중복 체크
-        if key not in seen:
-            seen.add(key)
-            news_list.append(h)
+    # 매크로 뉴스에서 실적 헤드라인과 중복되는 항목 제거
+    # (③ 주요 기업 실적에서만 다루도록 — 헤드라인 목록과 분리)
+    earnings_keys = {h[:40] for h in earnings_news}
+    macro_news    = [h for h in macro_news if h[:40] not in earnings_keys]
 
-    news_kr   = translate_headlines_to_korean(news_list)     # 한국어 번역
+    # 각각 번역 (매크로 → 📰 주요 뉴스 표시용, 실적 → ③번 AI 분석 전용)
+    macro_kr    = translate_headlines_to_korean(macro_news)
+    earnings_kr = translate_headlines_to_korean(earnings_news) if earnings_news else []
+
     news_block = "📰 *주요 뉴스*\n" + "\n".join(
-        f"• {h}" for h in news_kr[:8]
+        f"• {h}" for h in macro_kr[:8]
     )
 
     # ─ 포트폴리오 이미지 처리
@@ -584,7 +591,7 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
 
     # ─ AI 분석 (번역된 뉴스 사용)
     print("  → Claude AI 분석 중...")
-    ai_analysis = analyze_with_claude(market_data, news_kr, portfolio or None)
+    ai_analysis = analyze_with_claude(market_data, macro_kr, earnings_kr, portfolio or None)
     ai_block    = f"🤖 *AI 코스피 전략*\n{ai_analysis}"
 
     # ─ 공포탐욕지수
