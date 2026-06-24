@@ -1547,6 +1547,7 @@ def _build_app() -> Application:
     app.job_queue.run_daily(
         job_morning_brief,
         time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
+        days=(0, 1, 2, 3, 4),   # 월~금만 (0=월요일) — 미장 휴장 주말 제외
         name="morning_brief_daily",
     )
     app.job_queue.run_repeating(

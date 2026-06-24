@@ -1,9 +1,10 @@
 name: 코스피 모닝 브리핑
 
 on:
-  schedule:
-    - cron: '50 22 * * 0-4'   # 월~금 22:50 UTC = 화~토 07:50 KST
-  workflow_dispatch:            # 수동 테스트용
+  # schedule 비활성화 — Render 봇(job_queue)이 매일 07:50 KST 단일 소스로 전송
+  # schedule:
+  #   - cron: '50 22 * * 0-4'
+  workflow_dispatch:            # 수동 테스트용으로만 유지
 
 jobs:
   send-briefing:
