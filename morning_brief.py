@@ -324,7 +324,7 @@ def analyze_with_claude(market_data: dict, news_list: list, portfolio: list = No
         f"  {k}: {v['price']:.2f} ({'+' if v['pct']>=0 else ''}{v['pct']:.2f}%)"
         for k, v in market_data.items()
     )
-    news_text = "\n".join(news_list[:6])
+    news_text = "\n".join(news_list[:12])   # 실적+매크로 뉴스 모두 포함되도록 확대
 
     portfolio_section = ""
     if portfolio:
