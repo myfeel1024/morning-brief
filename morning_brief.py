@@ -258,14 +258,27 @@ _NEWS_TRUSTED_DOMAINS = (
 )
 
 
-def _newsapi_search(query: str, since_iso: str, sort_by: str, page_size: int) -> list[str]:
-    """NewsAPI /v2/everything 공용 호출 헬퍼"""
+def _newsapi_search(query: str, since_iso: str, sort_by: str, page_size: int,
+                    use_domain_filter: bool = True, in_title: bool = False) -> list[str]:
+    """
+    NewsAPI /v2/everything 공용 호출 헬퍼.
+
+    use_domain_filter=False 인 경우 도메인 제한을 걸지 않음.
+    NewsAPI 무료 플랜은 Bloomberg/Barron's/WSJ 원문은 색인이 거의 없고,
+    대신 Slashdot·Yahoo Finance·Biztoc 같은 재배포(syndication) 매체를 통해
+    내용을 가져온다. 회사명을 명시한 구체적 쿼리는 도메인 제한 없이 검색.
+
+    in_title=True 인 경우 q 대신 qInTitle 사용 — 본문 전체가 아니라 제목에서만
+    매칭하여 "Apple 언급 + revenue 언급"처럼 무관한 기사가 느슨하게 걸리는 것을 방지.
+    """
     if not NEWS_API_KEY:
         return []
+    domain_param = f"&domains={_NEWS_TRUSTED_DOMAINS}" if use_domain_filter else ""
+    q_param = "qInTitle" if in_title else "q"
     url = (
         "https://newsapi.org/v2/everything"
-        f"?q={requests.utils.quote(query)}"
-        f"&domains={_NEWS_TRUSTED_DOMAINS}"
+        f"?{q_param}={requests.utils.quote(query)}"
+        f"{domain_param}"
         f"&from={since_iso}"
         "&language=en"
         f"&sortBy={sort_by}"
@@ -293,34 +306,42 @@ def fetch_earnings_news(max_articles: int = 8):
     """
     기업 실적 뉴스를 '최신순(publishedAt)'으로 별도 수집.
     매크로 뉴스(relevancy 정렬)에 묻혀서 누락되는 것을 방지.
-    최근 16시간 이내로 좁혀서 간밤 발표분을 우선 포착.
 
     1순위: S&P500 시가총액 상위 대형주 — 회사명 명시 검색으로
           실적 시즌 일반 키워드 경쟁에서도 절대 누락되지 않도록 보장.
           (NewsAPI 쿼리 길이 제한 때문에 12개씩 묶어서 분할 검색)
-    2순위: 일반 실적 키워드로 나머지 슬롯 채움.
+          도메인 제한 없이 검색 — Bloomberg/Barron's 원문은 무료 플랜에
+          색인이 거의 없고 Slashdot/Yahoo Finance 등 재배포처에 있는
+          경우가 많아, 회사명+실적 키워드만으로 충분히 구체적이라 판단.
+          최근 30시간 — 브리핑 실행 시점이 다소 늦어져도 전날 밤 발표분을 포착.
+    2순위: 일반 실적 키워드 + 신뢰 도메인으로 나머지 슬롯 채움 (최근 16시간, 노이즈 방지).
     """
-    since = (datetime.now(timezone.utc) - timedelta(hours=16)).strftime("%Y-%m-%dT%H:%M:%S")
-    earnings_kw = (
+    since_wide   = (datetime.now(timezone.utc) - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%S")
+    since_narrow = (datetime.now(timezone.utc) - timedelta(hours=16)).strftime("%Y-%m-%dT%H:%M:%S")
+    # 제목 검색용 — 실적 키워드 + 주가 반응 표현(탬블/서지 등) 포함
+    earnings_kw_title = (
         "(earnings OR \"quarterly results\" OR \"beats estimates\" "
-        "OR \"misses estimates\" OR guidance OR revenue)"
+        "OR \"misses estimates\" OR guidance OR revenue OR "
+        "tumbles OR surges OR soars OR plunges OR jumps OR slides)"
     )
 
     seen, results = set(), []
 
-    # 1순위: S&P500 대형주 명시 검색 (배치 분할)
+    # 1순위: S&P500 대형주 명시 검색 (배치 분할, 도메인 제한 없음, 30시간)
+    # qInTitle 사용 — 본문 전체 검색은 매칭이 느슨해서 무관한 기사가 다수 섞임
     for batch in _chunked(_SP500_MEGACAP_WATCHLIST, 12):
         if len(results) >= max_articles:
             break
         names = " OR ".join(f'"{n}"' if " " in n else n for n in batch)
-        query = f"({names}) AND {earnings_kw}"
-        for h in _newsapi_search(query, since, "publishedAt", 4):
+        query = f"({names}) AND {earnings_kw_title}"
+        for h in _newsapi_search(query, since_wide, "publishedAt", 4,
+                                 use_domain_filter=False, in_title=True):
             key = h[:40]
             if key not in seen and len(results) < max_articles:
                 seen.add(key)
                 results.append(h)
 
-    # 2순위: 일반 실적 키워드로 나머지 슬롯 채움
+    # 2순위: 일반 실적 키워드로 나머지 슬롯 채움 (신뢰 도메인만, 16시간)
     if len(results) < max_articles:
         general_query = (
             "earnings OR \"quarterly results\" OR \"beats estimates\" "
@@ -328,7 +349,7 @@ def fetch_earnings_news(max_articles: int = 8):
             "OR \"earnings call\" OR revenue OR \"earnings surprise\""
         )
         remaining = max_articles - len(results)
-        for h in _newsapi_search(general_query, since, "publishedAt", remaining):
+        for h in _newsapi_search(general_query, since_narrow, "publishedAt", remaining):
             key = h[:40]
             if key not in seen and len(results) < max_articles:
                 seen.add(key)
