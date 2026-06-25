@@ -190,12 +190,15 @@ def fetch_news(query: str = None, max_articles: int = 9):
         "today in", "this week in", "roundup",
     ]
 
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    # 주의: NewsAPI 무료 플랜은 domains 필터 + 최근 24시간 이내 날짜를
+    # 함께 쓰면 결과가 0개로 나옴 (도메인별 인덱싱 지연으로 추정, 실측 확인됨).
+    # 36시간 전부터로 잡아야 안전하게 결과가 나온다.
+    since = (datetime.now(timezone.utc) - timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%S")
     url = (
         "https://newsapi.org/v2/everything"
         f"?q={requests.utils.quote(query)}"
         f"&domains={trusted_domains}"
-        f"&from={yesterday}"
+        f"&from={since}"
         "&language=en"
         "&sortBy=relevancy"
         f"&pageSize={max_articles}"
@@ -317,11 +320,16 @@ def fetch_earnings_news(max_articles: int = 8):
     2순위: 일반 실적 키워드 + 신뢰 도메인으로 나머지 슬롯 채움 (최근 16시간, 노이즈 방지).
     """
     since_wide   = (datetime.now(timezone.utc) - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%S")
-    since_narrow = (datetime.now(timezone.utc) - timedelta(hours=16)).strftime("%Y-%m-%dT%H:%M:%S")
-    # 제목 검색용 — 실적 키워드 + 주가 반응 표현(탬블/서지 등) 포함
+    # domains 필터 사용 시 36시간 이상 필요 (NewsAPI 무료 플랜 인덱싱 지연, 실측 확인)
+    since_narrow = (datetime.now(timezone.utc) - timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%S")
+    # 제목 검색용 — 실적 "결과" 표현(beat/miss/tops/exceeds 등)을 우선하고
+    # 주가 반응 표현(tumbles/surges 등)은 보조로 포함 — 주가반응과 실적결과가
+    # 다를 수 있으므로(예: 실적은 호조인데 가이던스 우려로 주가 하락) 결과 표현 비중을 높임
     earnings_kw_title = (
         "(earnings OR \"quarterly results\" OR \"beats estimates\" "
-        "OR \"misses estimates\" OR guidance OR revenue OR "
+        "OR \"misses estimates\" OR \"tops estimates\" OR \"exceeds estimates\" "
+        "OR \"beats profit\" OR \"tops profit\" OR \"record revenue\" OR \"record profit\" "
+        "OR guidance OR revenue OR "
         "tumbles OR surges OR soars OR plunges OR jumps OR slides)"
     )
 
@@ -334,7 +342,7 @@ def fetch_earnings_news(max_articles: int = 8):
             break
         names = " OR ".join(f'"{n}"' if " " in n else n for n in batch)
         query = f"({names}) AND {earnings_kw_title}"
-        for h in _newsapi_search(query, since_wide, "publishedAt", 4,
+        for h in _newsapi_search(query, since_wide, "publishedAt", 6,
                                  use_domain_filter=False, in_title=True):
             key = h[:40]
             if key not in seen and len(results) < max_articles:
@@ -439,6 +447,7 @@ def analyze_with_claude(market_data: dict, news_list: list,
    - 달러/원 환율 영향
    - 유가·원자재 이슈 (해당 시)
 ③ 주요 기업 실적 (위 [기업 실적 발표 뉴스]만 근거로 작성. 어닝 서프라이즈/쇼크 있으면 반드시 언급. 특이사항 없으면 "특이 실적 발표 없음"이라고만 짧게 적기)
+   ※ 중요: "주가 반응"과 "실적 결과"를 혼동하지 마세요. 헤드라인에 주가 급락/급등만 언급되고 실적이 beat/miss인지 명시 안 되어 있으면, 추측하지 말고 "주가는 하락(또는 급등)했으나 실적 자체의 호조/부진 여부는 명확하지 않음"이라고 사실대로 적으세요. 실적이 좋아도 가이던스 우려·섹터 전반 약세 등 다른 이유로 주가가 하락하는 경우가 흔합니다.
 ④ 주목 섹터 (코스피 관점에서 오늘 강세/약세 예상 섹터)
 ⑤ 오늘의 코스피 전략 한 줄
 ⑥ 리스크 요인 (있다면)
