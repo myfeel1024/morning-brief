@@ -323,14 +323,16 @@ def fetch_earnings_news(max_articles: int = 8):
     # domains 필터 사용 시 36시간 이상 필요 (NewsAPI 무료 플랜 인덱싱 지연, 실측 확인)
     since_narrow = (datetime.now(timezone.utc) - timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%S")
     # 제목 검색용 — 실적 "결과" 표현(beat/miss/tops/exceeds 등)을 우선하고
-    # 주가 반응 표현(tumbles/surges 등)은 보조로 포함 — 주가반응과 실적결과가
-    # 다를 수 있으므로(예: 실적은 호조인데 가이던스 우려로 주가 하락) 결과 표현 비중을 높임
+    # 실적 "결과" 확인 표현 위주 — 주가 반응(tumbles/surges 등)은 결과와
+    # 무관하게 움직일 수 있으므로 검색어에서 제외하고, beat/miss/in-line 등
+    # 실제 실적 판정에 쓰이는 표현만 사용
     earnings_kw_title = (
-        "(earnings OR \"quarterly results\" OR \"beats estimates\" "
-        "OR \"misses estimates\" OR \"tops estimates\" OR \"exceeds estimates\" "
-        "OR \"beats profit\" OR \"tops profit\" OR \"record revenue\" OR \"record profit\" "
-        "OR guidance OR revenue OR "
-        "tumbles OR surges OR soars OR plunges OR jumps OR slides)"
+        "(\"beats estimates\" OR \"misses estimates\" OR \"tops estimates\" "
+        "OR \"exceeds estimates\" OR \"beats profit\" OR \"tops profit\" "
+        "OR \"record revenue\" OR \"record profit\" OR \"in line with estimates\" "
+        "OR \"matches estimates\" OR \"earnings beat\" OR \"earnings miss\" "
+        "OR \"earnings surprise\" OR \"quarterly results\" OR earnings OR "
+        "guidance OR revenue)"
     )
 
     seen, results = set(), []
@@ -446,8 +448,13 @@ def analyze_with_claude(market_data: dict, news_list: list,
    - 미 10년물 국채금리 수준과 방향 (반드시 포함)
    - 달러/원 환율 영향
    - 유가·원자재 이슈 (해당 시)
-③ 주요 기업 실적 (위 [기업 실적 발표 뉴스]만 근거로 작성. 어닝 서프라이즈/쇼크 있으면 반드시 언급. 특이사항 없으면 "특이 실적 발표 없음"이라고만 짧게 적기)
-   ※ 중요: "주가 반응"과 "실적 결과"를 혼동하지 마세요. 헤드라인에 주가 급락/급등만 언급되고 실적이 beat/miss인지 명시 안 되어 있으면, 추측하지 말고 "주가는 하락(또는 급등)했으나 실적 자체의 호조/부진 여부는 명확하지 않음"이라고 사실대로 적으세요. 실적이 좋아도 가이던스 우려·섹터 전반 약세 등 다른 이유로 주가가 하락하는 경우가 흔합니다.
+③ 주요 기업 실적 — 아래 [기업 실적 발표 뉴스]만 근거로, 실적 "결과"만 판정해서 적으세요.
+   ※ 작성 규칙 (반드시 준수):
+   - 주가 등락(급락/급등 %)은 언급하지 마세요. 오직 실적 자체가 어땠는지만 적으세요.
+   - 각 기업의 실적을 다음 중 하나로 명확히 분류: "어닝 서프라이즈"(시장 예상 상회) / "어닝 쇼크"(시장 예상 하회) / "시장 예상 부합"(대체로 무난)
+   - 헤드라인에 beat/miss/tops/exceeds/in line 등 결과를 확인할 명확한 표현이 없으면 추측하지 말고 "실적 결과 확인 불가"라고만 적고 다음 기업으로 넘어가세요. 주가 반응으로 실적을 추측하지 마세요.
+   - 같은 기업에 대해 시점이 다른 기사가 여러 개 있으면, 발표 시각이 가장 최신인 기사 내용을 우선해서 반영하세요.
+   - 특이사항 없으면 "특이 실적 발표 없음"이라고만 짧게 적기.
 ④ 주목 섹터 (코스피 관점에서 오늘 강세/약세 예상 섹터)
 ⑤ 오늘의 코스피 전략 한 줄
 ⑥ 리스크 요인 (있다면)
