@@ -30,6 +30,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from xml.etree import ElementTree as ET
 # .env 파일을 스크립트 위치 기준으로 직접 읽어서 환경변수 주입
 def _load_env_file():
     env_path = Path(__file__).resolve().parent / '.env'
@@ -368,6 +369,48 @@ def fetch_earnings_news(max_articles: int = 8):
     return results
 
 
+def fetch_earnings_news_kr(n: int = 6, hours: int = 30) -> list[str]:
+    """
+    한국어 Google News RSS로 '어닝 서프라이즈/쇼크' 실적 뉴스 수집.
+
+    NewsAPI 무료 플랜은 모든 기사에 ~24시간 색인 지연이 걸려 당일 발표된
+    실적(특히 미국 마감 후~한국 아침 사이 발표분)을 못 잡는 경우가 많다.
+    반면 한국 경제매체는 "어닝 서프라이즈/쇼크"라는 명확한 표현으로 매우
+    빠르게(발표 직후 수십 분 내) 보도하므로 이를 보조 소스로 사용한다.
+    이미 한국어이므로 번역이 불필요하고 결과 판정도 헤드라인에 이미 포함됨.
+    """
+    from email.utils import parsedate_to_datetime
+
+    query = "어닝서프라이즈 OR 어닝쇼크 실적"
+    url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    try:
+        res = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        root = ET.fromstring(res.content)
+        results = []
+        for item in root.findall(".//item"):
+            title_el = item.find("title")
+            pub_el   = item.find("pubDate")
+            if title_el is None or not title_el.text:
+                continue
+            # 최근 N시간 이내만 — 오래된 컨텍스트 기사(과거 분기 등) 제외
+            if pub_el is not None and pub_el.text:
+                try:
+                    pub_dt = parsedate_to_datetime(pub_el.text)
+                    if pub_dt < cutoff:
+                        continue
+                except Exception:
+                    pass
+            title = title_el.text.strip()
+            results.append(title)
+            if len(results) >= n:
+                break
+        return results
+    except Exception:
+        return []
+
+
 def translate_headlines_to_korean(headlines: list) -> list:
     """Claude API로 뉴스 헤드라인을 한국어로 번역"""
     if not ANTHROPIC_API_KEY or not headlines:
@@ -418,7 +461,7 @@ def analyze_with_claude(market_data: dict, news_list: list,
         for k, v in market_data.items()
     )
     news_text     = "\n".join(news_list[:9])              # 매크로/지정학 뉴스
-    earnings_text = "\n".join(earnings_list[:5]) if earnings_list else "특이 실적 발표 없음"
+    earnings_text = "\n".join(earnings_list[:8]) if earnings_list else "특이 실적 발표 없음"
 
     portfolio_section = ""
     if portfolio:
@@ -655,7 +698,8 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
 
     print("  → 뉴스 수집 및 번역 중...")
     macro_news    = fetch_news()                  # 매크로 뉴스 (relevancy 정렬)
-    earnings_news = fetch_earnings_news()          # 실적 뉴스 (최신순, 최근 16시간)
+    earnings_news = fetch_earnings_news()          # 실적 뉴스 (영어, NewsAPI)
+    earnings_kr_native = fetch_earnings_news_kr()  # 실적 뉴스 (한국어, NewsAPI 24h 지연 우회)
 
     # 매크로 뉴스에서 실적 헤드라인과 중복되는 항목 제거
     # (③ 주요 기업 실적에서만 다루도록 — 헤드라인 목록과 분리)
@@ -664,7 +708,10 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
 
     # 각각 번역 (매크로 → 📰 주요 뉴스 표시용, 실적 → ③번 AI 분석 전용)
     macro_kr    = translate_headlines_to_korean(macro_news)
-    earnings_kr = translate_headlines_to_korean(earnings_news) if earnings_news else []
+    earnings_en_kr = translate_headlines_to_korean(earnings_news) if earnings_news else []
+    # 한국어 네이티브 결과를 먼저 배치 — 이미 "어닝서프라이즈/쇼크"가 명시되어
+    # 더 신뢰도가 높고, NewsAPI의 24시간 지연 없이 당일 발표분을 포착함
+    earnings_kr = earnings_kr_native + earnings_en_kr
 
     news_block = "📰 *주요 뉴스*\n" + "\n".join(
         f"• {h}" for h in macro_kr[:8]
