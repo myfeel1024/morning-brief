@@ -1,9 +1,9 @@
 {
   "phase": "성장기",
-  "leading_score": 0.03718046699530132,
-  "coincident_score": 0.033983552275417404,
-  "lagging_score": -0.18025196015586087,
+  "leading_score": 0.006374222269318247,
+  "coincident_score": 0.03216383713237336,
+  "lagging_score": -0.1650080577168365,
   "slowdown_warning": false,
   "growth_to_slowdown": false,
-  "updated": "2026-06-20"
+  "updated": "2026-06-27"
 }
