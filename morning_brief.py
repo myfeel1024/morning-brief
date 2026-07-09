@@ -249,6 +249,78 @@ def _chunked(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i:i + size]
 
+
+# 실적 발표 예정 조회용 — 티커: 표시명 (한국 증시 영향 큰 대형주 위주)
+_EARNINGS_CALENDAR_TICKERS = {
+    # 반도체·빅테크 (한국 증시 직결)
+    "NVDA": "엔비디아", "MU": "마이크론", "AVGO": "브로드컴", "AMD": "AMD",
+    "QCOM": "퀄컴", "TSM": "TSMC", "ASML": "ASML", "INTC": "인텔",
+    "AAPL": "애플", "MSFT": "마이크로소프트", "GOOGL": "알파벳(구글)",
+    "AMZN": "아마존", "META": "메타", "TSLA": "테슬라", "ORCL": "오라클",
+    "NFLX": "넷플릭스", "ADBE": "어도비", "CRM": "세일즈포스", "CSCO": "시스코",
+    "IBM": "IBM", "SMCI": "슈퍼마이크로", "ARM": "ARM", "DELL": "델",
+    # 금융
+    "JPM": "JP모건", "BAC": "뱅크오브아메리카", "GS": "골드만삭스",
+    "V": "비자", "MA": "마스터카드",
+    # 헬스케어·소비재·산업재
+    "UNH": "유나이티드헬스", "LLY": "일라이릴리", "JNJ": "존슨앤존슨",
+    "WMT": "월마트", "COST": "코스트코", "HD": "홈디포",
+    "XOM": "엑슨모빌", "BA": "보잉", "CAT": "캐터필러", "FDX": "페덱스",
+}
+
+
+def fetch_upcoming_earnings(days: int = 10) -> list[dict]:
+    """
+    yfinance 실적 예정일 데이터로 '앞으로 실적 발표가 남은' 대형주 목록 반환.
+    뉴스 기반이 아니라 확정 예정일 데이터라 '며칠 전 발표분 섞임' 문제가 없음.
+
+    반환: [{"date": date, "ticker": str, "name": str, "eps_est": float|None, "dday": int}, ...]
+          발표일 오름차순 정렬.
+    """
+    from datetime import date as _date
+
+    today   = _date.today()
+    horizon = today + timedelta(days=days)
+    results = []
+
+    for ticker, name in _EARNINGS_CALENDAR_TICKERS.items():
+        try:
+            cal = yf.Ticker(ticker).calendar
+            if not isinstance(cal, dict):
+                continue
+            ed = cal.get("Earnings Date")
+            if not ed or not isinstance(ed, list):
+                continue
+            edate = ed[0]
+            if today <= edate <= horizon:
+                results.append({
+                    "date":    edate,
+                    "ticker":  ticker,
+                    "name":    name,
+                    "eps_est": cal.get("Earnings Average"),
+                    "dday":    (edate - today).days,
+                })
+        except Exception:
+            continue
+
+    return sorted(results, key=lambda x: x["date"])
+
+
+def format_upcoming_earnings(items: list[dict]) -> str:
+    """실적 예정 목록을 텔레그램 표시용 텍스트로 변환"""
+    if not items:
+        return ""
+    weekday_kr = ["월", "화", "수", "목", "금", "토", "일"]
+    lines = ["📅 *실적 발표 예정* (미국 대형주)"]
+    for it in items:
+        d      = it["date"]
+        wd     = weekday_kr[d.weekday()]
+        dday   = "D-DAY" if it["dday"] == 0 else f"D-{it['dday']}"
+        eps    = it.get("eps_est")
+        eps_s  = f" · EPS예상 {eps:.2f}" if isinstance(eps, (int, float)) else ""
+        lines.append(f"• {d.month}/{d.day}({wd}) {dday}  {it['name']}{eps_s}")
+    return "\n".join(lines)
+
 _NEWS_SKIP_KEYWORDS = [
     "morning briefing", "daily briefing", "news briefing",
     "what to know", "what's happening", "here's what",
@@ -717,6 +789,11 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
         f"• {h}" for h in macro_kr[:8]
     )
 
+    # ─ 실적 발표 예정 (앞으로 남은 대형주 — 확정 예정일 데이터)
+    print("  → 실적 발표 예정 조회 중...")
+    upcoming = fetch_upcoming_earnings(days=10)
+    earnings_calendar_block = format_upcoming_earnings(upcoming)
+
     # ─ 포트폴리오 이미지 처리
     portfolio      = list(MY_PORTFOLIO)  # 수동 목록 복사
     portfolio_block = ""
@@ -776,6 +853,7 @@ def run_morning_brief(portfolio_image_path: str = None, send_to: list[str] | Non
         + separator
         + ai_block
         + portfolio_block
+        + (separator + earnings_calendar_block if earnings_calendar_block else "")
         + separator
         + "_📌 본 브리핑은 투자 참고용이며 투자 결정의 책임은 본인에게 있습니다._"
     )
