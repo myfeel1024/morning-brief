@@ -708,19 +708,29 @@ def get_fear_greed() -> str:
         res  = requests.get(
             "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/",
             timeout=6,
-            headers={"User-Agent": "Mozilla/5.0"},
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+                "Origin": "https://edition.cnn.com",
+            },
         )
+        if res.status_code != 200:
+            return ""
         data  = res.json()
         score = data["fear_and_greed"]["score"]
-        rating = data["fear_and_greed"]["rating"]
-        emoji = {
-            "Extreme Fear": "😱", "Fear": "😨",
-            "Neutral": "😐", "Greed": "😄", "Extreme Greed": "🤑",
-        }.get(rating, "📊")
-        label = {
-            "Extreme Fear": "극도의 공포", "Fear": "공포",
-            "Neutral": "중립", "Greed": "탐욕", "Extreme Greed": "극도의 탐욕",
-        }.get(rating, rating)
+        # CNN rating은 소문자로 옴 ("extreme fear", "fear", "neutral", ...)
+        rating = str(data["fear_and_greed"]["rating"]).lower().strip()
+        emoji, label = {
+            "extreme fear": ("😱", "극도의 공포"),
+            "fear":         ("😨", "공포"),
+            "neutral":      ("😐", "중립"),
+            "greed":        ("😄", "탐욕"),
+            "extreme greed": ("🤑", "극도의 탐욕"),
+        }.get(rating, ("📊", rating))
         return f"{emoji} CNN 공포탐욕지수: {score:.0f}점 — {label}"
     except Exception:
         return ""

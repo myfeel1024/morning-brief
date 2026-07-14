@@ -391,11 +391,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/econ         — 미국 경기 국면 분석\n"
         "  (선행·동행·후행지표 → 회복/성장/둔화/침체 판단)\n"
         "  매월 말일 08:00 자동 브리핑\n"
+        "/feargreed    — CNN 공포·탐욕 지수 (실시간)\n"
         "/help         — 도움말\n\n"
         "💬 *대화체도 됩니다:*\n"
         "• 한국 퀀트 알려줘\n"
         "• 미국 퀀트 알려줘\n"
         "• 경기지표 알려줘\n"
+        "• 공포탐욕지수 알려줘\n"
         "• 삼성전자 7만원 넘으면 알려줘",
         parse_mode="Markdown",
     )
@@ -1191,6 +1193,110 @@ _ECON_TRIGGERS = [
     "경기분석", "경기 분석", "경기사이클", "경기 사이클",
     "경기 알려줘", "경기알려줘", "경제지표", "경제 지표",
 ]
+_FEAR_GREED_TRIGGERS = [
+    "공포탐욕", "공포 탐욕", "탐욕공포", "탐욕 공포",
+    "공포지수", "공포 지수", "탐욕지수", "탐욕 지수",
+    "fear greed", "fear & greed", "fear and greed", "fng", "f&g",
+]
+
+# ── CNN 공포·탐욕 지수 (실측 조회) ──────────────────────────────
+
+_CNN_FG_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+    "Origin": "https://edition.cnn.com",
+}
+
+_FG_LABEL = {
+    "extreme fear": ("😱", "극도의 공포"),
+    "fear":         ("😨", "공포"),
+    "neutral":      ("😐", "중립"),
+    "greed":        ("😄", "탐욕"),
+    "extreme greed": ("🤑", "극도의 탐욕"),
+}
+
+# CNN 세부 구성지표 (표시할 7개, key → 한글명)
+_FG_COMPONENTS = [
+    ("market_momentum_sp500", "시장 모멘텀 (S&P500)"),
+    ("stock_price_strength",  "주가 강도 (신고가/신저가)"),
+    ("stock_price_breadth",   "주가 폭 (등락 거래량)"),
+    ("put_call_options",      "풋/콜 옵션"),
+    ("market_volatility_vix", "변동성 (VIX)"),
+    ("junk_bond_demand",      "정크본드 수요"),
+    ("safe_haven_demand",     "안전자산 수요"),
+]
+
+
+def _fg_desc(rating: str) -> str:
+    return _FG_LABEL.get((rating or "").lower().strip(), ("📊", rating or "?"))[1]
+
+
+def fetch_fear_greed_detail() -> str:
+    """CNN Fear & Greed Index 실측값 상세 요약. 실패 시 빈 문자열."""
+    try:
+        res = requests.get(
+            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/",
+            timeout=8, headers=_CNN_FG_HEADERS,
+        )
+        if res.status_code != 200:
+            return ""
+        data = res.json()
+        fg    = data["fear_and_greed"]
+        score = fg["score"]
+        emoji, label = _FG_LABEL.get(
+            str(fg.get("rating", "")).lower().strip(), ("📊", fg.get("rating", "?"))
+        )
+
+        lines = [
+            f"{emoji} CNN 공포·탐욕 지수 (Fear & Greed Index)",
+            "",
+            f"현재: {score:.0f}점 — {label}",
+            "",
+            "📅 추이",
+            f"· 전일 종가: {fg['previous_close']:.0f}점",
+            f"· 1주 전: {fg['previous_1_week']:.0f}점",
+            f"· 1달 전: {fg['previous_1_month']:.0f}점",
+            f"· 1년 전: {fg['previous_1_year']:.0f}점",
+            "",
+            "🧭 세부 구성지표",
+        ]
+        for key, kname in _FG_COMPONENTS:
+            comp = data.get(key)
+            if isinstance(comp, dict) and comp.get("score") is not None:
+                lines.append(f"· {kname}: {comp['score']:.0f}점 ({_fg_desc(comp.get('rating'))})")
+
+        lines += [
+            "",
+            "기준: 0(극단적 공포) ~ 100(극단적 탐욕) · 출처 CNN",
+        ]
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+async def cmd_feargreed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+    msg = await update.message.reply_text("💭 공포·탐욕 지수 조회 중...")
+    loop = asyncio.get_event_loop()
+    try:
+        text = await asyncio.wait_for(
+            loop.run_in_executor(None, fetch_fear_greed_detail), timeout=15
+        )
+    except asyncio.TimeoutError:
+        text = ""
+    if text:
+        await msg.edit_text(text)
+    else:
+        await msg.edit_text(
+            "❌ CNN 공포·탐욕 지수를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.\n"
+            "실시간 확인: cnn.com/markets/fear-and-greed"
+        )
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1199,6 +1305,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     question = update.message.text.strip()
     chat_id  = update.effective_chat.id
+
+    # ── 공포·탐욕 지수 감지 (실측값 직접 회신, AI 추정 금지) ──
+    if any(t in question.lower() for t in _FEAR_GREED_TRIGGERS):
+        await cmd_feargreed(update, context)
+        return
 
     # ── 경기 국면 감지 ──
     if any(t in question for t in _ECON_TRIGGERS):
@@ -1479,6 +1590,7 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("quant_us",  cmd_quant_us))
     app.add_handler(CommandHandler("alert",     cmd_alert))
     app.add_handler(CommandHandler("econ",      cmd_econ))
+    app.add_handler(CommandHandler("feargreed", cmd_feargreed))
     app.add_handler(CommandHandler("debugprice", cmd_debugprice))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
