@@ -1236,16 +1236,26 @@ def _fg_desc(rating: str) -> str:
     return _FG_LABEL.get((rating or "").lower().strip(), ("📊", rating or "?"))[1]
 
 
+def _fetch_cnn_fg_json() -> dict | None:
+    """CNN Fear & Greed 원본 JSON. 최대 2회 재시도, 실패 시 None (진단 로그 출력)."""
+    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/"
+    for attempt in range(2):
+        try:
+            res = requests.get(url, timeout=8, headers=_CNN_FG_HEADERS)
+            if res.status_code == 200:
+                return res.json()
+            print(f"[FG] CNN status={res.status_code} (attempt {attempt+1}) body={res.text[:80]!r}", flush=True)
+        except Exception as e:
+            print(f"[FG] CNN 예외 (attempt {attempt+1}): {e}", flush=True)
+    return None
+
+
 def fetch_fear_greed_detail() -> str:
     """CNN Fear & Greed Index 실측값 상세 요약. 실패 시 빈 문자열."""
     try:
-        res = requests.get(
-            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/",
-            timeout=8, headers=_CNN_FG_HEADERS,
-        )
-        if res.status_code != 200:
+        data = _fetch_cnn_fg_json()
+        if not data:
             return ""
-        data = res.json()
         fg    = data["fear_and_greed"]
         score = fg["score"]
         emoji, label = _FG_LABEL.get(
