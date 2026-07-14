@@ -21,6 +21,11 @@
 """
 
 import re
+import warnings
+
+# yfinance 내부 코드가 최신 numpy에서 내는 DeprecationWarning 소음 억제
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import yfinance as yf
 import requests
 import anthropic

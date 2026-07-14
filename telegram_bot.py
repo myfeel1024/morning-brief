@@ -19,6 +19,12 @@ import re
 import base64
 import json
 import asyncio
+import warnings
+
+# yfinance 내부 코드가 최신 numpy에서 내는 DeprecationWarning 소음 억제
+# (기능과 무관한 경고이며, Render 로그를 에러처럼 빨갛게 도배함)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=r".*generic.*unit for NumPy timedelta.*")
 
 from datetime import datetime, timezone, timedelta, time as dtime
 from pathlib import Path
