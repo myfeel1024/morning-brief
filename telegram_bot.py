@@ -1265,7 +1265,14 @@ def fetch_fear_greed_detail() -> str:
         lines = [
             f"{emoji} CNN 공포·탐욕 지수 (Fear & Greed Index)",
             "",
-            f"현재: {score:.0f}점 — {label}",
+            "📊 구간 기준",
+            "😱 0~24 극단적 공포",
+            "😨 25~44 공포",
+            "😐 45~55 중립",
+            "😄 56~75 탐욕",
+            "🤑 76~100 극단적 탐욕",
+            "",
+            f"👉 현재: {score:.0f}점 — {label}",
             "",
             "📅 추이",
             f"· 전일 종가: {fg['previous_close']:.0f}점",
@@ -1282,7 +1289,7 @@ def fetch_fear_greed_detail() -> str:
 
         lines += [
             "",
-            "기준: 0(극단적 공포) ~ 100(극단적 탐욕) · 출처 CNN",
+            "출처: CNN Business",
         ]
         return "\n".join(lines)
     except Exception:
