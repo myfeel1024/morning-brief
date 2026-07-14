@@ -17,6 +17,7 @@
 """
 
 import os
+import re
 import json
 import requests
 import pandas as pd
@@ -379,6 +380,74 @@ def get_econ_cycle() -> dict:
     }
 
 
+# ── 판정 근거 자동 생성 ──────────────────────────────────────
+
+# 국면별 기대 방향 (선행, 동행, 후행) — get_econ_cycle의 phase_scores와 동일
+_PHASE_PATTERN = {
+    "회복기": ("up", "dn", "dn"),
+    "성장기": ("up", "up", "up"),
+    "둔화기": ("dn", "dn", "up"),
+    "침체기": ("dn", "dn", "dn"),
+}
+# 그룹 → 종합점수 키, 소속 지표 키
+_GROUP_DEF = {
+    "선행": ("leading_score",    ["sp500", "pmi", "csent", "spread"]),
+    "동행": ("coincident_score", ["indpro", "retail", "capu", "export"]),
+    "후행": ("lagging_score",    ["gdp", "unemp", "wage", "hours"]),
+}
+_ARROW = {"up": "↑", "dn": "↓", "fl": "→"}
+
+
+def _clean_name(name: str) -> str:
+    """지표명에서 괄호 단위 표기 제거 (예: 'GDP 성장률(%)' → 'GDP 성장률')."""
+    return re.sub(r"\s*\(.*?\)", "", name).strip()
+
+
+def _group_drivers(ind: dict, keys: list, direction: str, top: int = 2) -> list:
+    """그룹 방향(up/dn)에 실제로 기여한 지표명 상위 top개."""
+    scored = []
+    for k in keys:
+        t = ind.get(k, {}).get("trend", 0.0)
+        if direction == "up" and t > _THR_UP:
+            scored.append((t, _clean_name(ind[k]["name"])))
+        elif direction == "dn" and t < _THR_DN:
+            scored.append((t, _clean_name(ind[k]["name"])))
+    scored.sort(key=lambda x: -x[0] if direction == "up" else x[0])
+    return [name for _, name in scored[:top]]
+
+
+def build_phase_reason(result: dict) -> str:
+    """이번 국면 판정의 결정 요인 한 줄. 부합 그룹(주도 지표) + 상충 그룹."""
+    phase = result["phase"]
+    ind   = result["indicators"]
+    expected = _PHASE_PATTERN.get(phase)
+    if not expected:
+        return ""
+    actual = {
+        "선행": _dir(result["leading_score"]),
+        "동행": _dir(result["coincident_score"]),
+        "후행": _dir(result["lagging_score"]),
+    }
+    exp = dict(zip(["선행", "동행", "후행"], expected))
+
+    support, counter = [], []
+    for g in ["선행", "동행", "후행"]:
+        a, e = actual[g], exp[g]
+        if a == e and a != "fl":
+            drivers = _group_drivers(ind, _GROUP_DEF[g][1], a)
+            dtxt    = f"({'·'.join(drivers)})" if drivers else ""
+            support.append(f"{g}{_ARROW[a]}{dtxt}")
+        elif a != "fl" and a != e:
+            counter.append(f"{g}{_ARROW[a]}")
+
+    parts = []
+    if support:
+        parts.append("근거: " + " + ".join(support) + f" → {phase} 부합")
+    if counter:
+        parts.append("상충: " + ", ".join(counter))
+    return "📍 " + " / ".join(parts) if parts else ""
+
+
 def format_econ_report(result: dict) -> str:
     """Telegram 마크다운 메시지 포맷."""
     now = datetime.now()
@@ -432,6 +501,7 @@ def format_econ_report(result: dict) -> str:
         "",
     ] + warning_lines + [
         f"📌 현재 국면: *{result['phase']}*",
+    ] + ([reason] if (reason := build_phase_reason(result)) else []) + [
         "",
         "━━━ 🔮 선행지표 (미래 선행) ━━━",
         f"  📈 S\\&P500              {val('sp500', '.0f')}  {tl('sp500')}",
