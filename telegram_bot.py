@@ -702,50 +702,6 @@ async def job_check_alerts(context) -> None:
 
 # ── 경기 국면 분석 ────────────────────────────────────────────
 
-def _get_phase_quant_picks(phase: str) -> str:
-    """경기 국면 추천 티커 중 BUY 신호만 퀀트 점수 적용 → 포맷 문자열 반환."""
-    try:
-        from econ_cycle import _PHASE_TICKERS
-        from quant_us import score_tickers_quick
-
-        sectors = _PHASE_TICKERS.get(phase, [])
-        if not sectors:
-            return ""
-        all_tickers, ticker_to_sector = [], {}
-        for emoji, sector, tickers in sectors:
-            for t in tickers:
-                if t not in ticker_to_sector:
-                    all_tickers.append(t)
-                    ticker_to_sector[t] = f"{emoji} {sector}"
-
-        scored = score_tickers_quick(all_tickers)
-        if not scored:
-            return ""
-
-        buy_items = [item for item in scored if item["signal"] == "🟢BUY"]
-        if not buy_items:
-            return ""
-
-        lines = [f"\n―――――― 🟢 BUY 추천 종목 ――――――"]
-        for item in buy_items:
-            t      = item["ticker"]
-            raw    = ticker_to_sector.get(t, "")
-            # 섹터명 단축: 이모지 + 첫 단어만 (괄호·가운뎃점 이후 제거)
-            parts  = raw.split(" ", 1)
-            emoji_ = parts[0] if len(parts) > 1 else ""
-            name_  = parts[1] if len(parts) > 1 else raw
-            name_  = name_.split("(")[0].split("·")[0].strip()
-            sec    = f"{emoji_}{name_}"
-            m3     = f"{item['mom3m']*100:+.1f}%" if item["mom3m"] is not None else "N/A"
-            lines.append(
-                f"🟢 {t} [{sec}] 점수:{item['score']:.2f} 3M:{m3} RSI:{item['rsi']:.0f}"
-            )
-        return "\n".join(lines)
-    except Exception as e:
-        print(f"[quant_picks] 실패: {e}")
-        return ""
-
-
 async def cmd_econ(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """미국 경기 국면 분석 — /econ 또는 '경기지표 알려줘'"""
     if not is_authorized(update):
@@ -771,12 +727,7 @@ async def cmd_econ(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 + report
             )
 
-        # 퀀트 계산 중임을 먼저 표시
-        await msg.edit_text(report + "\n\n⏳ BUY 종목 퀀트 점수 계산 중...", parse_mode="Markdown")
-
-        picks = await loop.run_in_executor(None, lambda: _get_phase_quant_picks(current_phase))
-        full  = report + (picks if picks else "")
-        await msg.edit_text(full, parse_mode="Markdown")
+        await msg.edit_text(report, parse_mode="Markdown")
 
     except Exception as e:
         await msg.edit_text(f"❌ 경기지표 조회 실패: {e}")
@@ -799,8 +750,7 @@ async def _run_econ_and_notify(context, header: str) -> None:
             + report
         )
 
-    picks = await loop.run_in_executor(None, lambda: _get_phase_quant_picks(current_phase))
-    full  = f"{header}\n\n{report}" + (picks if picks else "")
+    full  = f"{header}\n\n{report}"
     for cid in AUTHORIZED_CHATS:
         try:
             for chunk in smart_split(full):

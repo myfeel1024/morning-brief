@@ -448,6 +448,96 @@ def build_phase_reason(result: dict) -> str:
     return "📍 " + " / ".join(parts) if parts else ""
 
 
+# 그룹별 대표 지표 (해석 문구용)
+_GROUP_MEMBERS_KO = {
+    "선행": "주가·PMI·소비심리·금리차",
+    "동행": "산업생산·소매판매·수출",
+    "후행": "GDP·고용·임금",
+}
+
+
+def _group_signal_note(group: str, direction: str) -> str:
+    """그룹이 현재 무엇을 말하는지 해석 문구."""
+    m = _GROUP_MEMBERS_KO.get(group, "")
+    if group == "선행":
+        if direction == "up":
+            return f"선행지표({m})가 상승 → 수개월 뒤 경기 개선을 선반영"
+        if direction == "dn":
+            return f"선행지표({m})가 하락 → 수개월 뒤 경기 약화를 예고"
+        return f"선행지표({m})는 보합 → 방향성 뚜렷하지 않음"
+    if group == "동행":
+        if direction == "up":
+            return f"동행지표(현재 실물경기: {m})는 확장 중 → 실물은 아직 견조"
+        if direction == "dn":
+            return f"동행지표(현재 실물경기: {m})가 하락 → 경기 둔화가 실물로 확인됨"
+        return f"동행지표(현재 실물경기: {m})는 보합 → 확장·수축 경계"
+    # 후행
+    if direction == "up":
+        return f"후행지표({m})는 견조 → 시차를 두고 반응, 아직 위축 신호 없음"
+    if direction == "dn":
+        return f"후행지표({m})까지 하락 → 경기 위축이 뒤늦게 확인되는 단계"
+    return f"후행지표({m})는 보합"
+
+
+def build_phase_interpretation(result: dict) -> list:
+    """국면 판정의 '판단 기준·해석' 상세 블록 (여러 줄)."""
+    phase    = result["phase"]
+    scores   = result["phase_scores"]
+    expected = _PHASE_PATTERN.get(phase)
+    if not expected:
+        return []
+
+    ordered = sorted(scores.items(), key=lambda x: -x[1])
+    second_phase, second_score = ordered[1] if len(ordered) > 1 else ("", 0.0)
+    gap = ordered[0][1] - second_score
+
+    actual = {
+        "선행": _dir(result["leading_score"]),
+        "동행": _dir(result["coincident_score"]),
+        "후행": _dir(result["lagging_score"]),
+    }
+    exp     = dict(zip(["선행", "동행", "후행"], expected))
+    match_g = [g for g in ["선행", "동행", "후행"] if actual[g] == exp[g] and actual[g] != "fl"]
+    clash_g = [g for g in ["선행", "동행", "후행"] if actual[g] != exp[g] and actual[g] != "fl"]
+
+    lines = ["━━━ 🧭 판단 기준·해석 ━━━"]
+
+    # 1) 판정 강도 (2위 국면과의 점수 격차)
+    if gap >= 0.8:
+        lines.append(f"• 판정 강도: *뚜렷* — 2위 {second_phase} 대비 +{gap:.1f}점 격차")
+    elif gap >= 0.3:
+        lines.append(f"• 판정 강도: *보통* — {second_phase}와 {gap:.1f}점 차, 전환 가능성 주시")
+    else:
+        lines.append(f"• 판정 강도: *약함(혼조)* — {second_phase}와 {gap:.1f}점 차, 경계 구간")
+
+    # 2) 그룹 정합성
+    lines.append(f"• 그룹 정합성: {len(match_g)}/3 부합" +
+                 (f" (상충: {', '.join(clash_g)})" if clash_g else " (세 축 모두 일치)"))
+
+    # 3) 각 그룹이 실제로 말하는 것
+    for g in ["선행", "동행", "후행"]:
+        lines.append(f"  - {_group_signal_note(g, actual[g])}")
+
+    # 4) 종합 해석
+    if len(match_g) == 3:
+        lines.append(f"• 종합: 세 축이 모두 {phase}를 가리켜 신뢰도 높음")
+    elif clash_g:
+        lines.append(
+            f"• 종합: 다수({'·'.join(match_g)})가 {phase}를 가리키나 "
+            f"{'·'.join(clash_g)}지표가 엇갈려 *전환기적 성격* — "
+            f"{'·'.join(clash_g)}지표 방향이 꺾이는지가 관건"
+        )
+    else:
+        lines.append("• 종합: 축들이 엇갈리는 혼조 — 방향 확정 전 관망 권고")
+
+    # 5) 방법론 주의점 (구조적 한계)
+    lines.append(
+        "• 참고: 선행 PMI는 유료 ISM 대체용 '지역 연준 지수 합성'이라 월 변동이 큼 · "
+        "방향 판정 임계값 ±0.8% · NBER식 공식 침체 판정과는 다름"
+    )
+    return lines
+
+
 def format_econ_report(result: dict) -> str:
     """Telegram 마크다운 메시지 포맷."""
     now = datetime.now()
@@ -531,6 +621,11 @@ def format_econ_report(result: dict) -> str:
         sc     = result["phase_scores"][ph]
         marker = " ◀ 현재" if ph == result["phase"] else ""
         lines.append(f"  {ph}: {sc:+.1f}{marker}")
+
+    interp = build_phase_interpretation(result)
+    if interp:
+        lines.append("")
+        lines += interp
 
     lines += [
         "",
