@@ -1360,68 +1360,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_send(msg, f"💬 {reply}", edit=True, user_msg=update.message, context=context)
 
 
-# ── /portfolio (보유 현황) ────────────────────────────────────
-
-async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update):
-        return
-    msg = await update.message.reply_text("⏳ 포트폴리오 현황 조회 중...")
-    try:
-        from quant_portfolio import get_portfolio_status, next_rebalance_date
-        status = get_portfolio_status()
-        next_r = next_rebalance_date()
-        full   = f"{status}\n\n📅 다음 리밸런싱 권장일: {next_r}"
-        await safe_send(msg, full, edit=True, user_msg=update.message, context=context)
-    except Exception as e:
-        await msg.edit_text(f"❌ 오류: {e}")
-
-
-# ── /rebalance (리밸런싱 실행) ────────────────────────────────
-
-async def cmd_rebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update):
-        return
-
-    args_list = context.args  # /rebalance [top_n] [apply]
-    top_n = 10
-    apply = False
-    for arg in (args_list or []):
-        if arg.isdigit():
-            top_n = int(arg)
-        elif arg.lower() == "apply":
-            apply = True
-
-    msg = await update.message.reply_text(
-        f"⏳ 리밸런싱 계산 중... (상위 {top_n}종목)\n"
-        + ("✅ apply 옵션: 완료 후 포트폴리오 자동 저장" if apply else
-           "ℹ️ 계산만 합니다. 실제 저장하려면 /rebalance apply")
-    )
-
-    try:
-        from quant_portfolio import compute_rebalance, apply_rebalance, format_rebalance
-
-        rebal = compute_rebalance(top_n=top_n)
-
-        if apply and "error" not in rebal:
-            apply_rebalance(rebal)
-            saved_note = "\n\n✅ 포트폴리오가 저장되었습니다. /portfolio 로 확인하세요."
-        else:
-            saved_note = "\n\n💡 실제 저장: /rebalance apply"
-
-        result_text = format_rebalance(rebal)
-        now  = datetime.now().strftime("%Y/%m/%d %H:%M")
-        full = (
-            f"🔄 *리밸런싱 검토* `{now}`\n"
-            f"{'─'*36}\n"
-            f"{result_text}"
-            f"{saved_note}"
-        )
-        await safe_send(msg, full, edit=True, user_msg=update.message, context=context, parse_mode="Markdown")
-
-    except Exception as e:
-        await msg.edit_text(f"❌ 리밸런싱 오류: {e}")
-
-
 # ── /quant_us (미국 퀀트 신호) ───────────────────────────────────
 
 async def cmd_quant_us(update: Update, context: ContextTypes.DEFAULT_TYPE):
