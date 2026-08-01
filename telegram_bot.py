@@ -1567,12 +1567,15 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("debugprice", cmd_debugprice))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.job_queue.run_daily(
-        job_morning_brief,
-        time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
-        days=(0, 1, 2, 3, 4),   # 월~금만 (0=월요일) — 미장 휴장 주말 제외
-        name="morning_brief_daily",
-    )
+    # 모닝브리핑 자동 발송은 GitHub Actions cron(morning_brief.yml)이 단일 소스.
+    # Render 무료 티어는 절전 시 이 내부 타이머가 안 울려 브리핑을 놓치므로
+    # (2026-07-31 미발송) 내부 스케줄은 비활성화. 수동 실행은 /brief 로 가능.
+    # app.job_queue.run_daily(
+    #     job_morning_brief,
+    #     time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
+    #     days=(0, 1, 2, 3, 4),
+    #     name="morning_brief_daily",
+    # )
     app.job_queue.run_repeating(
         job_check_alerts,
         interval=300,   # 5분마다

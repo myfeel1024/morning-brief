@@ -1,10 +1,12 @@
 name: 코스피 모닝 브리핑
 
 on:
-  # schedule 비활성화 — Render 봇(job_queue)이 매일 07:50 KST 단일 소스로 전송
-  # schedule:
-  #   - cron: '50 22 * * 0-4'
-  workflow_dispatch:            # 수동 테스트용으로만 유지
+  # 외부 cron이 단일 소스 — Render 무료 티어는 절전(spin-down) 시 내부
+  # job_queue 타이머가 안 울려 브리핑을 놓침(2026-07-31 미발송 원인).
+  # GitHub Actions는 Render 상태와 무관하게 항상 실행되므로 신뢰 가능.
+  schedule:
+    - cron: '50 22 * * 0-4'   # 월~금 22:50 UTC = 화~토 07:50 KST
+  workflow_dispatch:            # 수동 테스트용
 
 jobs:
   send-briefing:
