@@ -745,33 +745,58 @@ def get_fear_greed() -> str:
 
 # ── 6. 텔레그램 전송 ──────────────────────────────────────────
 
+def _tg_send_chunk(url: str, cid: str, chunk: str) -> bool:
+    """청크 1개 전송. Markdown 파싱 오류(400) 시 plain text로 재시도.
+    실제 전송 성공 여부(bool) 반환."""
+    # 1차: Markdown
+    try:
+        res = requests.post(url, data={
+            "chat_id": cid, "text": chunk, "parse_mode": "Markdown",
+        }, timeout=10)
+        if res.status_code == 200:
+            return True
+        # 400 등 파싱 실패 → Markdown 없이 재시도 (메시지는 반드시 배달)
+        print(f"[TG] Markdown 실패(chat={cid}, {res.status_code}): {res.text[:120]} → plain 재시도", flush=True)
+    except Exception as e:
+        print(f"[TG] 요청 예외(chat={cid}): {e} → plain 재시도", flush=True)
+
+    # 2차: plain text (parse_mode 제거)
+    try:
+        res = requests.post(url, data={"chat_id": cid, "text": chunk}, timeout=10)
+        if res.status_code == 200:
+            return True
+        print(f"[TG] plain 전송도 실패(chat={cid}, {res.status_code}): {res.text[:120]}", flush=True)
+    except Exception as e:
+        print(f"[TG] plain 전송 예외(chat={cid}): {e}", flush=True)
+    return False
+
+
 def send_telegram(text: str, send_to: list[str] | None = None):
     """텔레그램 봇으로 메시지 전송 (4096자 초과 시 분할).
     send_to 지정 시 해당 chat_id 목록에만 전송, 없으면 전체 브로드캐스트.
+    Markdown 파싱 실패 시 plain text로 자동 재전송하며, 아무에게도
+    전달하지 못하면 예외를 던져 (Actions 등에서) 실패가 드러나게 한다.
     """
-    if not TELEGRAM_BOT_TOKEN:
-        print("⚠️  텔레그램 설정 없음 — 콘솔에만 출력합니다.\n")
+    if not TELEGRAM_BOT_TOKEN or not (send_to or TELEGRAM_CHAT_ID.strip()):
+        # 토큰/수신자 미설정 = 배달 불가. 로컬 개발이면 콘솔 출력, 그 외엔 실패.
+        print("⚠️  텔레그램 설정 없음 (TOKEN/CHAT_ID) — 콘솔에만 출력합니다.\n")
         print(text)
-        return
+        raise RuntimeError("텔레그램 미설정: 브리핑을 전송하지 못했습니다 (TELEGRAM_BOT_TOKEN/CHAT_ID 확인)")
 
     url      = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     max_len  = 4000
     chunks   = [text[i:i+max_len] for i in range(0, len(text), max_len)]
     chat_ids = send_to if send_to else [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
 
+    delivered = 0
     for cid in chat_ids:
-        for chunk in chunks:
-            payload = {
-                "chat_id"   : cid,
-                "text"      : chunk,
-                "parse_mode": "Markdown",
-            }
-            try:
-                res = requests.post(url, data=payload, timeout=10)
-                if res.status_code != 200:
-                    print(f"전송 오류 (chat_id={cid}): {res.text}")
-            except Exception as e:
-                print(f"전송 실패 (chat_id={cid}): {e}")
+        ok_all = all(_tg_send_chunk(url, cid, chunk) for chunk in chunks)
+        if ok_all:
+            delivered += 1
+
+    if delivered == 0:
+        raise RuntimeError(f"텔레그램 전송 전면 실패 (수신자 {len(chat_ids)}명 전원). 위 [TG] 로그 확인")
+    print(f"[TG] 전송 완료: {delivered}/{len(chat_ids)}명", flush=True)
 
 
 # ── 6. 메인 실행 ──────────────────────────────────────────────
