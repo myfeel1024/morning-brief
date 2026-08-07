@@ -8,8 +8,11 @@ name: Render Keep-Alive
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # 10분마다 (절전 임계 15분보다 짧게)
-  workflow_dispatch:           # 수동 실행용
+    - cron: '*/10 * * * *'          # 상시: 10분마다 (절전 임계 15분보다 짧게)
+    # 브리핑 직전(07:50 KST=22:50 UTC) 촘촘히 핑 → 정시 발송 시 Render가
+    # 확실히 깨어있도록 보장. GitHub 지연 대비 여러 번 시도.
+    - cron: '30,38,44,48 22 * * 0-4'  # 07:30/38/44/48 KST (월~금)
+  workflow_dispatch:               # 수동 실행용
 
 # 여러 핑이 겹치지 않게 최신 것만 유지
 concurrency:

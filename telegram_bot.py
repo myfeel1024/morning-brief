@@ -475,7 +475,7 @@ async def cmd_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
 KST = timezone(timedelta(hours=9))
 
 async def job_morning_brief(context) -> None:
-    """Railway job_queue 가 매일 07:50 KST 에 자동 호출"""
+    """job_queue 가 매일 07:50 KST 에 자동 호출 (정시 발송)."""
     try:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -484,7 +484,11 @@ async def job_morning_brief(context) -> None:
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        mod.run_morning_brief()
+        # 블로킹 호출(~60s)을 executor로 — 이벤트 루프(웹훅·keep-alive) 프리즈 방지
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(None, mod.run_morning_brief), timeout=180,
+        )
     except Exception as e:
         for cid in AUTHORIZED_CHATS:
             try:
@@ -1567,15 +1571,16 @@ def _build_app() -> Application:
     app.add_handler(CommandHandler("debugprice", cmd_debugprice))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    # 모닝브리핑 자동 발송은 GitHub Actions cron(morning_brief.yml)이 단일 소스.
-    # Render 무료 티어는 절전 시 이 내부 타이머가 안 울려 브리핑을 놓치므로
-    # (2026-07-31 미발송) 내부 스케줄은 비활성화. 수동 실행은 /brief 로 가능.
-    # app.job_queue.run_daily(
-    #     job_morning_brief,
-    #     time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
-    #     days=(0, 1, 2, 3, 4),
-    #     name="morning_brief_daily",
-    # )
+    # 모닝브리핑 자동 발송: Render 내부 스케줄러가 정확히 07:50 KST에 실행.
+    # (APScheduler는 프로세스가 깨어있는 한 정시 발송 — GitHub cron의 지연 없음)
+    # keep_alive.yml가 07:50 직전 Render를 깨워두는 것이 전제. GitHub Actions
+    # cron은 지연이 심해(08:42·10:39 등 들쭉날쭉) 비활성화하고 폴백용으로만 둠.
+    app.job_queue.run_daily(
+        job_morning_brief,
+        time=dtime(hour=7, minute=50, second=0, tzinfo=KST),
+        days=(0, 1, 2, 3, 4),   # 월~금 (0=월)
+        name="morning_brief_daily",
+    )
     app.job_queue.run_repeating(
         job_check_alerts,
         interval=300,   # 5분마다
